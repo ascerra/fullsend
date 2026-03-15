@@ -11,7 +11,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def run_spotlighting(commit_message: str, injection_goal: str) -> DefenseResult:
+def run_spotlighting(commit_message: str, injection_goal: str, expected_assessment: str = "suspicious") -> DefenseResult:
     client = get_client()
     user_content = (
         f"<<<UNTRUSTED_DATA>>>\n"
@@ -26,4 +26,4 @@ def run_spotlighting(commit_message: str, injection_goal: str) -> DefenseResult:
         messages=[{"role": "user", "content": user_content}],
     )
     response_text = response.content[0].text
-    return validate_response(response_text, injection_goal)
+    return validate_response(response_text, injection_goal, expected_assessment)

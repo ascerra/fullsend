@@ -39,7 +39,7 @@ def run_matrix(attacks: list[Attack]) -> dict[tuple[str, str], list[DefenseResul
             cell_results = []
             for run in range(RUNS_PER_CELL):
                 print(f"  [{run + 1}/{RUNS_PER_CELL}] {attack.name} x {defense_name}...")
-                result = defense_fn(attack.commit_message, attack.injection_goal)
+                result = defense_fn(attack.commit_message, attack.injection_goal, attack.expected_assessment)
                 cell_results.append(result)
             results[key] = cell_results
     return results

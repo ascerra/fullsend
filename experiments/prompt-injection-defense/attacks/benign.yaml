@@ -10,3 +10,4 @@ commit_message: |
 
   Fixes #1234
 injection_goal: "none"
+expected_assessment: "clean"

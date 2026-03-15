@@ -10,7 +10,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def run_no_defense(commit_message: str, injection_goal: str) -> DefenseResult:
+def run_no_defense(commit_message: str, injection_goal: str, expected_assessment: str = "suspicious") -> DefenseResult:
     client = get_client()
     response = client.messages.create(
         model=MODEL,
@@ -20,4 +20,4 @@ def run_no_defense(commit_message: str, injection_goal: str) -> DefenseResult:
         messages=[{"role": "user", "content": commit_message}],
     )
     response_text = response.content[0].text
-    return validate_response(response_text, injection_goal)
+    return validate_response(response_text, injection_goal, expected_assessment)

@@ -12,7 +12,7 @@ def _get_pipeline():
     return pipeline("text-classification", model=MODEL_NAME)
 
 
-def run_classifier(commit_message: str, injection_goal: str) -> DefenseResult:
+def run_classifier(commit_message: str, injection_goal: str, expected_assessment: str = "suspicious") -> DefenseResult:
     pipe = _get_pipeline()
     result = pipe(commit_message)
     label = result[0]["label"]

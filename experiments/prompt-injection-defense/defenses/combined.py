@@ -5,10 +5,10 @@ from defenses.sandwiching import run_sandwiching
 from defenses.classifier import run_classifier
 
 
-def run_combined(commit_message: str, injection_goal: str) -> DefenseResult:
+def run_combined(commit_message: str, injection_goal: str, expected_assessment: str = "suspicious") -> DefenseResult:
     results = {
-        "spotlighting": run_spotlighting(commit_message, injection_goal),
-        "sandwiching": run_sandwiching(commit_message, injection_goal),
+        "spotlighting": run_spotlighting(commit_message, injection_goal, expected_assessment),
+        "sandwiching": run_sandwiching(commit_message, injection_goal, expected_assessment),
         "classifier": run_classifier(commit_message, injection_goal),
     }
 

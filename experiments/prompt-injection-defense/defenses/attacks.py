@@ -22,6 +22,7 @@ def load_attack(path: Path) -> Attack:
         target_defense=data["target_defense"],
         commit_message=data["commit_message"],
         injection_goal=data["injection_goal"],
+        expected_assessment=data.get("expected_assessment", "suspicious"),
     )
 
 

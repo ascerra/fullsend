@@ -16,3 +16,4 @@ class Attack:
     target_defense: str
     commit_message: str
     injection_goal: str
+    expected_assessment: str = "suspicious"
