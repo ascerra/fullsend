@@ -1,6 +1,6 @@
 ---
 title: "NUMBER. TITLE"
-status: Proposed | Undecided | Accepted | Deprecated | Superseded
+status: Proposed  # Valid values: Proposed, Undecided, Accepted, Deprecated, Superseded
 relates_to:
   - problem-doc-name  # filename without .md from docs/problems/
 topics:

@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := help
 .PHONY: help lint lint-adr-status lint-adr-numbers lint-adr-frontmatter
 
 help:
