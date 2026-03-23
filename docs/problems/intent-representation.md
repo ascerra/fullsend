@@ -99,10 +99,22 @@ Pre-authorized categories of changes that the organization always wants:
 
 - Dependency updates that pass CI
 - Linter/formatter fixes
-- Test additions that don't change production behavior
+- **Additive** test changes that don't change production behavior (see below)
 - Documentation typo fixes
 
 The intent is "we always want these." An agent verifies the change actually falls in this category (static analysis: "this change only touches test files") and no further authorization is needed.
+
+**Test changes require additive-only verification.** Not all test-only changes are Tier 0. Tests are part of the trust boundary — review agents rely on them to validate production code. A change that weakens assertions, broadens mocks, reduces coverage, or removes checks is modifying a guardrail, not adding coverage. The Tier 0 gate for test changes must verify that the change is additive:
+
+- New test files or new test functions: Tier 0
+- New assertions added to existing tests: Tier 0
+- Weakened assertions (e.g., `Equal` → `NotNil`, exact match → substring): **not Tier 0** — requires Tier 1 justification
+- Removed or commented-out test cases: **not Tier 0**
+- Mocks that replace real dependencies in security-sensitive paths: **not Tier 0**
+- Test refactoring that restructures without weakening: Tier 0, but the review agent must verify no net reduction in assertion strength
+- Binary or opaque files (`.xz`, `.bin`, encoded blobs, etc.) in test directories: **not Tier 0** — these cannot be meaningfully reviewed by agents and require human review regardless of location
+
+This distinction matters because of the [temporal split-payload attack](security-threat-model.md#cross-cutting-attack-pattern-temporal-split-payload-test-poisoning): an attacker can poison the test suite through Tier 0 test changes and later exploit the blind spot with a separate production change that passes the weakened tests. Static analysis for Tier 0 classification must go beyond "does this only touch test files?" to "does this make the test suite strictly stronger?"
 
 ### Tier 1: Tactical (issue is sufficient)
 

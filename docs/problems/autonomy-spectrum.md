@@ -28,6 +28,8 @@ CODEOWNERS is already a well-understood GitHub mechanism. In the agentic context
 - **CODEOWNERS files themselves** — always human-owned, never agent-modifiable. This is a hard rule, not a suggestion. If agents could modify CODEOWNERS, they could remove their own guardrails.
 - Cross-repo interface contracts
 - UX-facing components
+- **Test files for human-owned production paths** — if production code at a path is human-owned, its corresponding tests should be too. Tests are part of the security boundary for the code they cover; an attacker who can weaken tests autonomously can blind the review agents to vulnerabilities in the production code. See [security-threat-model.md](security-threat-model.md#cross-cutting-attack-pattern-temporal-split-payload-test-poisoning).
+- **Tekton pipeline and task definitions, Dockerfiles** — these are the build system and define what executes during builds. Agents may legitimately modify these as part of feature implementation, so blanket CODEOWNERS may be too restrictive. Whether these are human-owned or instead receive heightened review agent scrutiny without gating is a per-repo trade-off. See [security-threat-model.md](security-threat-model.md#the-xz-variant-test-data-as-covert-payload-storage).
 
 ### How CODEOWNERS interacts with agents
 

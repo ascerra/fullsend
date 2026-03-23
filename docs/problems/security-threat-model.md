@@ -209,6 +209,72 @@ In a multi-agent system, agents consume each other's output. If any agent trusts
 - How do we detect a compromised agent? What are the signals?
 - Should agents be isolated (separate execution environments) to limit lateral movement? (See [agent-infrastructure.md](agent-infrastructure.md) for the infrastructure dimension.)
 
+## Cross-cutting attack pattern: temporal split-payload test poisoning
+
+The five threats above model attacks on agents, on credentials, on the model, and on the supply chain. But there is a class of attack that exploits the *testing infrastructure itself* — the guardrail that review agents rely on to judge code safety.
+
+### The attack
+
+The attacker splits a malicious change across two PRs separated by time:
+
+1. **PR 1 (setup — Tier 0).** A PR that only modifies test files. It appears to add coverage for an edge case, but subtly weakens an assertion, introduces a misleading mock, or removes a check that would catch a specific vulnerability. Because "test additions that don't change production behavior" are classified as Tier 0 standing rules (see [intent-representation.md](intent-representation.md)), this PR requires no per-change intent. It touches no CODEOWNERS-guarded paths. It merges autonomously.
+
+2. **PR 2 (payload — weeks or months later).** A separate PR introduces a vulnerability in production code. The Correctness Agent evaluates test adequacy and finds that the relevant code path is covered by tests that pass. The Security Agents evaluate the diff in isolation and see nothing overtly malicious — the vulnerability relies entirely on the blind spot created by the poisoned test. The Injection Defense Agent finds no prompt injection patterns because the attack uses syntactically valid code, not adversarial text.
+
+### Why existing defenses don't catch it
+
+- **Tier 0 classification** treats test-only changes as inherently low-risk, but tests are part of the trust boundary — they are what review agents rely on to validate production code. Poisoning tests is poisoning the oracle.
+- **Stateless per-PR review** means no review agent correlates the test weakening in PR 1 with the production change in PR 2. Each PR is evaluated independently.
+- **CODEOWNERS** typically guards production APIs, deployment manifests, and security policies — not test directories.
+- **The Injection Defense Agent** looks for prompt injection patterns. This attack uses standard, valid code. There is nothing to flag.
+- **Agent drift detection** (periodic metrics, dashboards) operates on a slow feedback loop. The attack is designed to complete before aggregate drift would become visible.
+
+### Why this is a distinct threat
+
+This is not a variant of an existing threat category. It combines elements of several:
+
+- It exploits **Tier 0 intent rules** (an intent representation problem)
+- It defeats **stateless review** (an agent architecture problem)
+- It subverts **testing as a guardrail** (a repo readiness problem)
+- It uses **temporal separation** to evade correlation
+
+Temporal separation of attack stages is not new — it is a well-established evasion technique. The [xz backdoor (CVE-2024-3094)](https://en.wikipedia.org/wiki/XZ_Utils_backdoor) is a direct real-world precedent: the attacker spent years building trust as a contributor, then introduced malicious binary test fixtures (`tests/files/*.xz`) that contained the actual backdoor payload, extracted at build time. The "test data" *was* the delivery mechanism. That attack demonstrated that test infrastructure is not a low-risk area — it is an attack surface, and one that reviewers (human and automated) systematically under-scrutinize.
+
+What makes this pattern particularly dangerous in the agentic context is that the system *formally codifies* the assumption that test-only changes are low-risk (Tier 0), and review agents operate statelessly per-PR. The xz attack succeeded against human reviewers who could in principle have correlated the commits; here, the system architecture structurally prevents that correlation.
+
+### The xz variant: test data as covert payload storage
+
+The weakened-assertion model is not the only way to weaponize test infrastructure. The xz backdoor used a different technique: binary test fixtures (`tests/files/*.xz`) that contained the encrypted backdoor payload, extracted at build time by modified build scripts. The test data was a covert storage channel, not a weakened oracle.
+
+In konflux-ci, the build system is Tekton — pipelines and tasks defined as YAML in git. A Tekton task definition is the equivalent of an autotools macro: it specifies what scripts run during the build. An attacker who can introduce opaque test fixtures *and* modify a Tekton task or pipeline definition to process them has the same extraction mechanism that the xz attack used.
+
+This means the attack surface includes:
+
+- **Binary or opaque files in test directories** — files that agents (and humans) cannot meaningfully review. A new `.xz`, `.bin`, or encoded blob in `tests/` is not a "test addition" in any reviewable sense, even though it is technically additive.
+- **Tekton pipeline and task definitions** — `.tekton/` directory contents, pipeline YAML, task scripts. These are the build system. A modified task definition could extract payload from test data, inject build steps, or alter artifact contents. They are as security-sensitive as the production code they build.
+- **Dockerfiles and Containerfiles** — these define the build environment itself and can execute arbitrary commands.
+- **Scripts invoked by Tekton tasks** — shell scripts, Python scripts, or other executables called from pipeline steps.
+- **Language-specific build tooling within repos** — konflux-ci repos are heterogeneous (Go, React, Python, shell). Individual repos may contain Makefiles, `hack/` scripts, build utilities, or code generation tools that execute during local development or CI. A Go controller repo's `Makefile` or a `hack/generate.sh` script is a potential extraction mechanism just as autotools macros were for xz.
+
+### Defense considerations
+
+- **Distinguish additive from reductive test changes.** A Tier 0 classification for test-only changes should require that the change is *additive* — new test cases, new assertions, increased coverage. Changes that weaken assertions, broaden mocks, reduce coverage, or remove checks should not qualify as Tier 0. See [intent-representation.md](intent-representation.md) for the refined Tier 0 definition.
+- **Opaque files are never Tier 0.** Binary blobs, encoded data, and other files that cannot be meaningfully reviewed by agents should not qualify for autonomous merge regardless of where they appear. If an agent cannot reason about a file's content, the file requires human review.
+- **CODEOWNERS coverage for tests on guarded paths.** If production code at a given path is human-owned, its corresponding test files should be too. A test file is part of the security boundary for the code it tests.
+- **Scrutiny for build definitions.** Tekton pipeline and task definitions (`.tekton/`), Dockerfiles, and build scripts define what runs during the build. Agents may legitimately need to modify these files as part of feature implementation — adding a build step, changing a base image, updating a pipeline to support a new artifact type. Blanket CODEOWNERS on all build files would force human approval on every such change, which may be appropriate for some repos but too restrictive for others. The alternative is relying on review agents to apply heightened scrutiny to build definition changes without CODEOWNERS gating — treating them as security-sensitive context for the Platform Security Agent rather than as a hard gate.
+- **Coverage regression as a merge gate.** Not just "do tests pass" but "does meaningful coverage decrease on security-sensitive paths." A PR that weakens assertions without reducing line coverage is harder to catch, but assertion-density metrics or mutation testing scores can help.
+- **Cross-PR temporal analysis.** A review capability (either in the Correctness Agent or a dedicated Test Integrity Agent) that checks whether recently-modified tests still provide meaningful coverage for the code under review. When evaluating a production change, the agent examines the git history of the relevant test files and flags recent weakening.
+- **Property-based and specification-driven testing.** As noted in the [supply chain section](#threat-4-supply-chain-attacks), property-based tests verify invariants declared independently of the implementation. They are harder to subvert because the attacker would need to modify the property declarations — which can be CODEOWNERS-guarded — not just the example-based test cases.
+
+### Open questions
+
+- Can static analysis reliably distinguish additive from reductive test changes? What about refactoring that restructures tests without weakening them?
+- How far back should cross-PR temporal analysis look? Too short a window misses slow-burn attacks; too long a window creates noise.
+- Should test files for security-critical paths be automatically added to CODEOWNERS when the production path is guarded, or is that too restrictive?
+- Is assertion-density or mutation-testing-score regression a practical merge gate, or too expensive/noisy for routine use?
+- How does this interact with the agent drift problem? Gradual, non-malicious test quality degradation creates the same blind spots that a deliberate attacker would exploit.
+- What heuristics should agents use to identify opaque/binary files? File extension? Entropy analysis? MIME type detection? How do we avoid blocking legitimate binary test fixtures (e.g., golden files for image processing)?
+
 ## Cross-cutting security principles
 
 1. **Defense in depth** — no single control should be the only thing preventing an attack

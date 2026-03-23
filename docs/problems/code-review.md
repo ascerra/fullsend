@@ -58,8 +58,9 @@ Evaluates whether the code does what it claims to do.
 - Edge cases and error paths
 - Consistency with existing codebase patterns
 - Test adequacy — are the right things being tested?
+- **Test integrity** — do the tests actually verify the behavior they claim to? When reviewing a production change, the agent should examine whether the relevant tests meaningfully constrain the code's behavior or merely assert that it runs without error. If test files covering the changed code were recently modified, the agent should check whether those modifications weakened the test's ability to catch regressions. (See [security-threat-model.md](security-threat-model.md#cross-cutting-attack-pattern-temporal-split-payload-test-poisoning) for why this matters.)
 
-**Context needed:** The diff, relevant surrounding code, test files, existing patterns in the repo.
+**Context needed:** The diff, relevant surrounding code, test files, existing patterns in the repo. For test integrity checks: git history of relevant test files.
 
 ### Intent alignment agent
 
