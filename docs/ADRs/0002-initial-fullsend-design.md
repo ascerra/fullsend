@@ -57,7 +57,7 @@ We propose adopting the following **reference workflow** as the mental model for
 - `/triage` — run or re-run triage on the issue
 - `/code` — hand issue to PR agent (expects readiness or forces with human ack — policy per repo)
 - `/review` — enqueue review swarm for current PR head
-- `/reset-triage` — clear triage outcome labels and re-open triage (optional)
+- `/reset-triage` — clear triage outcome labels (including **`not-ready`** and **`not-reproducible`**) and re-open triage (optional)
 - `/flow-trace` — re-generate the **post-merge flow trace** comment (optional; restricted commenters — e.g. maintainers — for recovery or correction after a bad edit)
 
 Commands should be validated (e.g. authorized commenters, org members only) in implementation.
@@ -69,13 +69,14 @@ Repos may extend this set; names below are **semantic**, not prescriptive string
 | Label | Meaning |
 |-------|---------|
 | `duplicate` | Triage: same work is already tracked elsewhere; this issue should be **closed** and discussion continues on the canonical issue |
-| `not-ready` | Triage: insufficient information or failed reproducibility gate |
+| `not-ready` | Triage: insufficient information to proceed (detail missing before a reliable repro attempt) |
+| `not-reproducible` | Triage: enough information was available to attempt reproduction, but the reported bug **could not be reproduced** in the triage sandbox; **human intervention** is required. **No further automated processing** (no PR agent, no implementation/review pipeline) while this label is present |
 | `ready-for-coding` | Triage passed; implementation may proceed |
 | `ready-for-review` | PR agent finished implementation + checks; awaiting multi-agent review |
 | `ready-for-merge` | Review coordinator: **all** reviewers **unanimously** approved merge for this round (subject to branch protection / humans) |
 | `requires-manual-review` | Review coordinator: reviewers **did not** unanimously agree to merge (split vote, conflicting conclusions, or conflicting **security severities**); **humans** must decide next steps |
 
-**Mutual exclusion:** Implementation should enforce consistent label sets (e.g. removing `ready-for-coding` when setting `ready-for-review`). An issue marked **`duplicate`** must **not** carry **`ready-for-coding`**, **`ready-for-review`**, **`ready-for-merge`**, or **`requires-manual-review`**. **`ready-for-merge`** and **`requires-manual-review`** must **not** be applied together on the same issue/PR.
+**Mutual exclusion:** Implementation should enforce consistent label sets (e.g. removing `ready-for-coding` when setting `ready-for-review`). An issue marked **`duplicate`** must **not** carry **`ready-for-coding`**, **`ready-for-review`**, **`ready-for-merge`**, or **`requires-manual-review`**. An issue marked **`not-reproducible`** must **not** carry **`ready-for-coding`**, **`ready-for-review`**, **`ready-for-merge`**, or **`requires-manual-review`** — automation stops until humans resolve the situation or triage runs again (see Phase A). **`not-reproducible`** and **`not-ready`** should **not** be applied together (triage picks one outcome per pass). **`ready-for-merge`** and **`requires-manual-review`** must **not** be applied together on the same issue/PR.
 
 **Later-phase labels (for reset semantics):** Labels **`ready-for-review`**, **`ready-for-merge`**, and **`requires-manual-review`** are treated as **downstream of triage**; triage and PR-agent **starts** strip them when resetting pipeline state (see below).
 
@@ -106,16 +107,17 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 
 **Triage agent responsibilities:**
 
-1. **Duplicate detection** — Before investing in reproduction or coding, check whether the same (or substantially the same) problem is **already tracked** in another issue. Use **repo/org search**, **issue list filters**, **embedding or keyword similarity**, or other **policy-defined** signals (implementation choice). Base the match **only** on **`title`**, **`body`**, and **attachments** of the current issue compared to **indexed metadata** of candidate issues—not on reading arbitrary comment threads for candidates unless the search backend already summarized them. If triage concludes the new issue is a **duplicate** with **high enough confidence** (threshold per repo): apply the **`duplicate`** label; post a **triage-output comment** that **links the canonical issue** (GitHub URL or `#NNN` reference) and briefly states why it is considered the same; **close** the **new** issue (`state: closed` via API). Do **not** apply **`ready-for-coding`** or **`not-ready`** for an implementation track. If uncertain, **do not** mark duplicate—continue with normal triage.
+1. **Duplicate detection** — Before investing in reproduction or coding, check whether the same (or substantially the same) problem is **already tracked** in another issue. Use **repo/org search**, **issue list filters**, **embedding or keyword similarity**, or other **policy-defined** signals (implementation choice). Base the match **only** on **`title`**, **`body`**, and **attachments** of the current issue compared to **indexed metadata** of candidate issues—not on reading arbitrary comment threads for candidates unless the search backend already summarized them. If triage concludes the new issue is a **duplicate** with **high enough confidence** (threshold per repo): apply the **`duplicate`** label; post a **triage-output comment** that **links the canonical issue** (GitHub URL or `#NNN` reference) and briefly states why it is considered the same; **close** the **new** issue (`state: closed` via API). Do **not** apply **`ready-for-coding`**, **`not-ready`**, or **`not-reproducible`** for an implementation track. If uncertain, **do not** mark duplicate—continue with normal triage.
 2. **Information sufficiency** — From the **`title`**, **`body`**, and **attachments** only, decide whether the issue contains enough detail to act (expected behavior, actual behavior, version/context, minimal steps). If not, post a **structured triage-output comment** listing **specific** missing items and apply **`not-ready`**. Do not start implementation. (That comment is **machine handoff and feedback**, not something the triage agent re-reads as user input on the next run—the next run still trusts **`title` + `body` + attachments**.)
-3. **Reproducibility** — When feasible, attempt to **reproduce** the problem inside the **triage sandbox** (see Sandboxing), using **only** what appears in the **`title`**, **`body`**, and attachments. Reproducibility is a **primary** signal for readiness: failure to reproduce with given steps strengthens the case for `not-ready`. **Skip** if the issue was already handled as a **duplicate** (closed).
+3. **Reproducibility** — When feasible, attempt to **reproduce** the problem inside the **triage sandbox** (see Sandboxing), using **only** what appears in the **`title`**, **`body`**, and attachments. **Skip** if the issue was already handled as a **duplicate** (closed). If information is **insufficient** to attempt reproduction meaningfully, apply **`not-ready`** (do not apply **`not-reproducible`**). If information is **sufficient** but the bug **cannot be reproduced** after a good-faith attempt, apply **`not-reproducible`**: post a **triage-output comment** stating what was tried, flag the issue for **human intervention**, and **do not** enqueue further automated work (**no** PR agent, **no** implementation/review pipeline) until triage runs again. Do **not** use **`not-reproducible`** when the right outcome is simply “need more detail” (**`not-ready`**).
 4. **Test case artifact** — When possible, produce a **test case** aligned with the repo’s **existing test framework** (same runner, conventions, paths). **Attachments** mean **only** what GitHub supports as **issue attachments** (native uploads on the issue via GitHub UI or **Issues API** attachment mechanisms the platform provides). Do **not** rely on ad hoc binary hosting, external blob stores, or non-GitHub “attachment” URLs as a substitute—if it cannot be expressed as **body** text, **fenced code in a triage-output comment**, or a **GitHub-native attachment**, the triage-output comment must still specify exact file paths and patch-shaped instructions for the PR agent.
 
 **Outcomes:**
 
 - **Duplicate path:** Apply **`duplicate`**, comment with **link to canonical issue**, **close** this issue; no implementation workflow.
-- **Ready path:** Apply **`ready-for-coding`**, summarize reproduction result in the triage-output comment and point to the proposed test artifact. (**`not-ready`** was already cleared at triage **start** if it was set.)
-- **Not ready path:** Apply **`not-ready`**, do not apply `ready-for-coding`.
+- **Ready path:** Apply **`ready-for-coding`**, summarize reproduction result in the triage-output comment and point to the proposed test artifact. (**`not-ready`** and **`not-reproducible`** were already cleared at triage **start** if they were set.)
+- **Not ready path:** Apply **`not-ready`**, do not apply `ready-for-coding` or `not-reproducible`.
+- **Not reproducible path:** Apply **`not-reproducible`**, post a triage-output comment explaining the failed repro attempt, do not apply `ready-for-coding`. **Stop** automated processing for this issue until a **new triage run** (automation or human-triggered) **starts** — at triage **start**, **`not-reproducible`** is **removed** together with **`not-ready`**, **`ready-for-coding`**, and later-phase labels, and triage executes the **full** Phase A sequence again from a clean slate.
 
 **Triggers (triage agent):**
 
@@ -123,11 +125,11 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 2. **Issue `title` or `body` edited** (`issues` **`edited`** when `title` or `body` changed).
 3. **`/triage`** in a comment.
 
-**When a triage run starts** (before duplicate detection and the rest): **remove** **`not-ready`**, **`ready-for-coding`**, and **all later-phase labels** (**`ready-for-review`**, **`ready-for-merge`**, **`requires-manual-review`**). That **resets the pipeline** on the issue so triage outcomes are authoritative for a new pass. (**`duplicate`** is a triage outcome: do **not** remove it here unless **repo policy** says a new triage run clears it—default is to **leave** **`duplicate`** unless humans removed it.)
+**When a triage run starts** (before duplicate detection and the rest): **remove** **`not-ready`**, **`not-reproducible`**, **`ready-for-coding`**, and **all later-phase labels** (**`ready-for-review`**, **`ready-for-merge`**, **`requires-manual-review`**). That **resets the pipeline** on the issue so triage outcomes are authoritative for a new pass and a prior **`not-reproducible`** handoff does not block a full re-triage. (**`duplicate`** is a triage outcome: do **not** remove it here unless **repo policy** says a new triage run clears it—default is to **leave** **`duplicate`** unless humans removed it.)
 
 ### Phase B — Implementation (PR agent)
 
-**Entry:** The **`ready-for-coding`** label was **applied** to the issue (trigger event) **or** **`/code`** was invoked—**before** the run strips labels. Issue is **open** and **not** **`duplicate`** (and no other conflicting state).
+**Entry:** The **`ready-for-coding`** label was **applied** to the issue (trigger event) **or** **`/code`** was invoked—**before** the run strips labels. Issue is **open** and **not** **`duplicate`**, **not** **`not-reproducible`**, and in no other conflicting state.
 
 **Triggers (PR agent):**
 
@@ -189,9 +191,9 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 
 **Post-merge trace agent responsibilities:**
 
-1. **Collect evidence** — From GitHub (and internal dispatch logs if available): issue and PR timelines, **label transitions** (including **`duplicate`**, **`requires-manual-review`**, **`not-ready`** ↔ **`ready-for-coding`**, **`ready-for-review` ↔ `ready-for-coding`**, and triage re-runs), **issue `body` / `title` edit** events when available, comment timelines with **stable permalinks**, required check runs and final conclusions, merge commit SHA, base/head SHAs at merge (including **head SHA per review round** when useful), and **correlation identifiers** (e.g. trace IDs from the observability building block) when the implementation emits them. Attribute comments to **agent vs human** when the platform provides that signal (e.g. GitHub App actor).
+1. **Collect evidence** — From GitHub (and internal dispatch logs if available): issue and PR timelines, **label transitions** (including **`duplicate`**, **`not-reproducible`**, **`requires-manual-review`**, **`not-ready`** ↔ **`ready-for-coding`**, **`ready-for-review` ↔ `ready-for-coding`**, and triage re-runs), **issue `body` / `title` edit** events when available, comment timelines with **stable permalinks**, required check runs and final conclusions, merge commit SHA, base/head SHAs at merge (including **head SHA per review round** when useful), and **correlation identifiers** (e.g. trace IDs from the observability building block) when the implementation emits them. Attribute comments to **agent vs human** when the platform provides that signal (e.g. GitHub App actor).
 2. **Structure by workflow phase** — Emit sections that mirror **Phase A–C** (triage, implementation, review), each listing **what ran**, **outcome**, and **pointers** (e.g. permalink to the final check suite). Include explicit **handoff points** (labels applied/removed, PR opened, first and last **ready-for-review** / **ready-for-merge** transitions).
-3. **Enumerate every triage “not ready” iteration** — The trace **must** document **each** period or pass where the issue was **not workable** yet: every application of **`not-ready`**, every **triage re-run** after a **`body` or `title` edit**, and every transition back toward **`ready-for-coding`** when triage eventually passed. **Do not omit** “failed triage” history because a PR never existed yet—those iterations are often where intent was clarified. If triage instead applied **`duplicate`**, record that pass (label, **link to canonical issue** in the triage comment, **issue closed**) even when **no PR** exists. For **each** triage pass (chronological):
+3. **Enumerate every triage “not ready” or “not reproducible” iteration** — The trace **must** document **each** period or pass where the issue was **not workable** yet or was **handed off for human intervention** after a failed repro: every application of **`not-ready`**, every application of **`not-reproducible`** (with summary of what triage attempted), every **triage re-run** after a **`body` or `title` edit** (including reruns that **cleared** **`not-reproducible`** at triage start), and every transition back toward **`ready-for-coding`** when triage eventually passed. **Do not omit** “failed triage” history because a PR never existed yet—those iterations are often where intent was clarified. If triage instead applied **`duplicate`**, record that pass (label, **link to canonical issue** in the triage comment, **issue closed**) even when **no PR** exists. For **each** triage pass (chronological):
    - Note **bounding facts**: label changes, triage trigger (if known), and **issue `updated_at`** (or finer-grained **`body`/`title` change** metadata) when the API exposes it.
    - List **triage agent output comments** for that pass (missing-info checklist, ready summary, test proposal) with the same **short summary + permalink** pattern as review rounds.
    - If the triage agent applied **`not-ready`** without a comment (misconfiguration), still record the pass and link the best artifact (label timeline only).
@@ -224,7 +226,7 @@ Map comments to intents; audit log. ([Architecture](../architecture.md#2-slash-c
 
 ### 3. Label state machine guard
 
-Validates legal transitions; prevents contradictory labels (including **`duplicate`** vs implementation labels). Coordinates **atomic** **on-start** label strips for triage, PR, and review runs so resets are race-safe. ([Architecture](../architecture.md#3-label-state-machine-guard))
+Validates legal transitions; prevents contradictory labels (including **`duplicate`** and **`not-reproducible`** vs implementation labels). Coordinates **atomic** **on-start** label strips for triage, PR, and review runs so resets are race-safe. ([Architecture](../architecture.md#3-label-state-machine-guard))
 
 ### 4. Triage agent runtime
 
@@ -311,8 +313,9 @@ flowchart TB
 
   subgraph PH1["Phase A — Issue triage"]
     T[Triage agent]
-    TR{Sufficient info + repro?}
+    TR{Triage outcome}
     NR[not-ready]
+    NREP[not-reproducible]
     RFC1[ready-for-coding]
   end
 
@@ -340,8 +343,9 @@ flowchart TB
   LB --> T
   S1 --> T
   T --> TR
-  TR -->|no| NR
-  TR -->|yes| RFC1
+  TR -->|missing info| NR
+  TR -->|not reproducible| NREP
+  TR -->|ready| RFC1
 
   RFC1 --> P
   LB --> P
