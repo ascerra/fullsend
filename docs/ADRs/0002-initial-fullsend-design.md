@@ -82,10 +82,10 @@ Repos may extend this set; names below are **semantic**, not prescriptive string
 
 ### Agent roles (logical; may map to one or many processes)
 
-1. **Triage agent** — Duplicate detection, issue intake, reproducibility, test artifact proposal  
-2. **PR agent** — Branch, implement, test iteratively, open/update PR, fix checks  
-3. **Review agents** — N parallel reviewers + **one coordinator** (randomly designated per review round) to coalesce feedback  
-4. **Post-merge trace agent** — After a PR is **merged**, produces a **single audit-style comment** that reconstructs the **end-to-end flow** (issue → triage → implementation → checks → review → merge) so reviewers and auditors can see **what happened at each stage** without replaying the entire thread  
+1. **Triage agent** — Duplicate detection, issue intake, reproducibility, test artifact proposal
+2. **PR agent** — Branch, implement, test iteratively, open/update PR, fix checks
+3. **Review agents** — N parallel reviewers + **one coordinator** (randomly designated per review round) to coalesce feedback
+4. **Post-merge trace agent** — After a PR is **merged**, produces a **single audit-style comment** that reconstructs the **end-to-end flow** (issue → triage → implementation → checks → review → merge) so reviewers and auditors can see **what happened at each stage** without replaying the entire thread
 
 Each role is a **building block**: separate prompts, policies, sandboxes, and CI jobs can evolve independently.
 
