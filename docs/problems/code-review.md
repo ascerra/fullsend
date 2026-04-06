@@ -170,6 +170,14 @@ The human sees coherent framings and can pick the one that matches their underst
 
 This pattern is most valuable at escalation boundaries — where the system has already decided it can't resolve something autonomously. It doesn't replace confidence scores or explicit uncertainty signals; it complements them by making the *nature* of the uncertainty actionable. It applies wherever agents interact with humans: tier classification (see [intent-representation.md](intent-representation.md#the-tier-escalation-problem)), the exploration phase for proposed features (see [intent-representation.md](intent-representation.md#the-try-it-phase)), and deadlock resolution between review sub-agents (see [agent-architecture.md](agent-architecture.md#how-deadlocks-are-resolved)).
 
+## Review as salvage
+
+The sub-agent model above assumes a binary outcome: approve or reject. But when reviewing external contributions (especially AI-generated ones), a third outcome becomes important: *salvage* — extracting the valuable idea from a poor implementation and having a project agent rewrite it properly.
+
+This adds a new composition model: **review + rewrite**. The review sub-agents identify what's wrong, and if the underlying idea has merit, a separate implementation pass fixes the issues rather than sending the PR back to the contributor for iteration. The review findings become input to a salvage decision rather than a merge/reject decision.
+
+Whether this belongs in the review system or is a separate workflow operating on review output is an open question. For a fuller treatment of the salvage concept, including trade-offs and cost implications, see [contribution-volume.md](contribution-volume.md#the-salvage-question).
+
 ## Open questions
 
 - Can we quantify review quality? How do we know if an agent's review is as good as a human's?
@@ -178,3 +186,5 @@ This pattern is most valuable at escalation boundaries — where the system has 
 - How do we prevent review agents from being "rubber stamps" — always approving because they're optimizing for throughput?
 - What's the right interface for review feedback? GitHub PR comments? A structured report? Both?
 - How do we handle multi-repo changes where the review needs to consider changes across repos together?
+- Is there a "coherence" or "fitness" review dimension that can't be decomposed into the existing sub-agents? The [taste problem](contribution-volume.md#the-taste-problem) suggests that some review concerns require holistic project judgment rather than specialized analysis.
+- At what volume does the salvage model become cost-effective compared to rejection? What's the token cost of salvaging a typical contribution vs. the contributor-retention value?

@@ -99,6 +99,20 @@ This doesn't mean the vision is wrong — it means it may be incomplete. There m
 
 What this third category looks like, how it interacts with the [autonomy spectrum](autonomy-spectrum.md), and whether it can be designed without simply slowing everything down, are open questions. But the problems documented in the sections above suggest that a model with only two human touchpoints may undermine its own foundations.
 
+## Maintainer throughput and the evaluator role
+
+The sections above focus on contributors whose role shifts from implementation to supervision. But there is a parallel problem for *maintainers* — the people who decide what gets merged.
+
+In traditional open source, the volume of incoming contributions is naturally bounded by the cost of producing them. AI removes that bound. Yegge's experience maintaining popular open-source projects illustrates the emerging reality: ~50 community PRs per day, most AI-assisted. The maintainer's job shifts from "review code" to "triage, categorize, and disposition a firehose of contributions."
+
+This isn't the same as the review fatigue described above. Review fatigue is about *depth* — the difficulty of evaluating each individual change. Maintainer throughput is about *breadth* — the impossibility of giving deep attention to every contribution when volume exceeds capacity.
+
+The practical response is to use agents to help with triage and disposition — agents evaluating whether other agents' contributions are worth merging. This creates a new human role: not author, not reviewer, but *evaluator* — someone whose primary skill is quickly assessing whether an agent's judgment about a contribution aligns with the project's direction and standards.
+
+This evaluator role maps directly to the concept of "taste" in software: the judgment that can't be codified as rules. Architectural invariants capture the hard constraints, intent verification captures authorized work, and review sub-agents catch correctness and security issues. What remains is a residual judgment about whether something *fits* — whether it belongs in this project, at this time, in this form. This judgment is currently exclusively human, and it's unclear whether it can be effectively approximated by agents or whether it's a fundamental limit on autonomy.
+
+For a deeper treatment of the contribution volume problem, including PR categorization, the salvage question, and fork dynamics, see [contribution-volume.md](contribution-volume.md).
+
 ## What might help
 
 These aren't solutions — they're directions worth exploring:

@@ -121,6 +121,21 @@ When agents can implement a proposed feature in hours rather than weeks, the vol
 
 The intent system's `proposed/` to `approved/` workflow assumes someone is filtering proposals. The priority intake model determines who that someone is and what criteria they use.
 
+### Fork economics under cheap code
+
+AI changes the economics of forking in ways that affect all priority models. Before AI, maintaining a fork was expensive — it required sustained engineering effort to track upstream, resolve conflicts, and maintain custom patches. This cost meant that forking was a last resort, and the threat of forking had limited credibility.
+
+When agents can maintain a fork cheaply — cherry-picking upstream changes, applying custom patches, resolving conflicts — the calculus changes. A downstream contributor that gets repeatedly overruled on priorities has a credible alternative: maintain an AI-maintained fork tuned to their needs. This undermines every model above, because the threat that keeps downstream contributors at the table (forking is too expensive) weakens.
+
+The implications for priority intake:
+
+- **Model A** (single list) risks driving frustrated contributors to fork when their priorities are repeatedly deprioritized.
+- **Model B** (federated) gains urgency — reconciliation failures no longer end in gridlock but in viable forks.
+- **Model C** (insulating layer) must be more responsive when the cost of "no" includes losing the contributor to a fork entirely.
+- **Model D** (contribution-weighted) breaks down fastest because cheap code means contributions flow to both upstream and fork simultaneously.
+
+This also extends beyond organizational contributors to individuals — see [contribution-volume.md](contribution-volume.md) for how cheap AI-generated contributions affect the project boundary more broadly.
+
 ## Relationship to other problem areas
 
 - **[Intent representation](intent-representation.md)** — This document addresses *where* strategic intent originates. Intent representation addresses *how* it gets encoded and enforced. The priority intake model feeds the intent system's `proposed/` directory. Note: intent-representation.md currently references "architects and PM" as approvers — these are downstream contributor roles with no formal standing in the project. The priority intake model must clarify how downstream contributor roles relate to project authority.

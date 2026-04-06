@@ -56,6 +56,21 @@ How are governance decisions made, and how does the community participate?
 - What's the escalation path when something goes wrong? Who gets paged? Who has authority to revoke agent autonomy in an emergency?
 - Can autonomy be automatically revoked? If a bad merge is detected (e.g., production incident traced to an agent-merged PR), should the system automatically downgrade the repo to human-required review?
 
+## Cost governance
+
+Token consumption and compute costs are scattered across multiple problem documents as secondary concerns, but at scale they become a governance problem in their own right.
+
+Every agent operation has a cost: triage costs tokens, implementation costs tokens, review costs tokens (multiplied by the number of sub-agents), salvaging external contributions costs tokens, and even rejecting a PR costs tokens if the rejection is well-reasoned. At 50+ PRs/day (as in the [contribution volume](contribution-volume.md) scenario), or across dozens of agent-autonomous repos, these costs compound.
+
+Cost governance intersects with several existing concerns:
+
+- **The [security threat model](security-threat-model.md)** identifies DoS via token exhaustion as a threat, with cost budgets as the defense. But who sets those budgets, who reviews them, and what happens when a legitimate surge looks like an attack?
+- **The salvage model** described in [code review](code-review.md) and [contribution volume](contribution-volume.md) trades tokens for community throughput. Without cost governance, a well-intentioned project could spend more on salvaging contributions than the contributions are worth.
+- **Agent testing** (see [testing-agents.md](testing-agents.md)) requires running LLM evaluations, which themselves cost tokens. Testing the agents that test the code that agents wrote — the cost multiplies at each layer.
+- **Production feedback loops** (see [production-feedback.md](production-feedback.md)) can generate runaway token spending if remediation loops don't have explicit cost budgets.
+
+The governance question isn't just "how much should we spend?" but "who decides how much to spend on what?" A project might reasonably decide that 80% of its token budget goes to internal implementation and review, 15% to external contribution triage and salvage, and 5% to agent testing — but those are strategic allocation decisions that belong to governance, not to individual agents or repos.
+
 ## Relationship to other problem areas
 
 - **Intent representation** defines the tiers and authorization mechanisms. Governance defines who has authority to change those definitions.

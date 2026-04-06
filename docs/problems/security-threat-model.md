@@ -352,6 +352,7 @@ DOS has elements that touch several existing threats:
 - **Agent-to-agent injection** — a compromised agent could generate outputs designed to trigger expensive cascades in downstream agents
 - **Insider threat** — a compromised account with org membership bypasses actor-based rate limits
 - **Agent drift** — gradual increases in agent response time or resource consumption may indicate an unintentional DOS caused by system degradation
+- **Contribution volume** — high-volume AI-generated external PRs (see [contribution-volume.md](contribution-volume.md)) create conditions where both DOS and temporal split-payload attacks become harder to detect. Volume provides cover: a deliberate attack can hide among legitimate contributions, and the sheer review workload increases the chance that a weakened test or a staged payload goes unnoticed. Rate limiting and triage are both DOS defenses and security screening mechanisms.
 
 ### Open questions
 

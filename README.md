@@ -29,6 +29,7 @@ This is not a product spec. It's an evolving exploration of a hard problem space
   - [Downstream/Upstream](docs/problems/downstream-upstream.md) — How downstream contributors express business priorities and how competing sources of strategic intent get reconciled
   - [Human Factors](docs/problems/human-factors.md) — Domain ownership, role shift, review fatigue, and contributor motivation
   - [Contributor Guidance](docs/problems/contributor-guidance.md) — Making contribution rules clear to both humans and machines, without requiring AI to participate
+  - [Contribution Volume](docs/problems/contribution-volume.md) — What happens when AI-generated external contributions overwhelm a project's capacity to evaluate them
   - [Performance Verification](docs/problems/performance-verification.md) — Catching agent-introduced performance regressions before they reach production
   - [Production Feedback](docs/problems/production-feedback.md) — How platform execution signals feed back into what agents work on and how they assess risk
   - [Testing the Agents](docs/problems/testing-agents.md) — CI for prompts: regression testing, eval frameworks, and behavioral verification for agent instructions
