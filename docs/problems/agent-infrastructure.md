@@ -63,7 +63,7 @@ Design and operate dedicated agent infrastructure: runner pool, sandboxing, tool
 
 Agents are often discussed as if they run on a developer workstation: fast local builds, an interactive shell, and a stable working tree. In practice, many organizations will run them on **shared CI runners, Kubernetes, or other ephemeral, network-only environments**. That shift surfaces tensions that are easy to underestimate when prototyping locally.
 
-- **Privilege versus validation** — Implementation agents may need to build container images, run integration tests, or reproduce fixtures that mirror CI. That pressure leads toward Docker-in-Docker, nested builders, or highly capable pods. Granting **`privileged`-equivalent or host-level access** to a workload whose behavior is driven by an LLM greatly expands blast radius; the overlap with [security-threat-model.md](security-threat-model.md) is direct. The design problem is how to validate changes **without** making the agent runtime a root-equivalent attack surface.
+- **Privilege versus validation** — Code agents may need to build container images, run integration tests, or reproduce fixtures that mirror CI. That pressure leads toward Docker-in-Docker, nested builders, or highly capable pods. Granting **`privileged`-equivalent or host-level access** to a workload whose behavior is driven by an LLM greatly expands blast radius; the overlap with [security-threat-model.md](security-threat-model.md) is direct. The design problem is how to validate changes **without** making the agent runtime a root-equivalent attack surface.
 
 - **Monolithic runner images** — Putting every compiler, SDK, and linter into a single “agent runner” image minimizes per-job setup, but it produces **large images, slow provisioning, a wide dependency footprint, and painful upgrade cycles**. It also fights stack heterogeneity: real orgs use many languages and build systems (see [applied/konflux-ci](applied/konflux-ci/README.md) for one example). Finer-grained patterns — dedicated tool or task images, hermetic layers, or on-demand tooling — trade pull and scheduling latency against maintainability and security review surface.
 
@@ -91,7 +91,7 @@ ACP may still be useful for **narrow experiments** where those constraints are a
 
 - **Thin orchestration layer** — We build a small layer that triggers agents, gathers results, and posts status checks; the actual compute is 3rd party or internal. This keeps coordination logic in our control while deferring platform choice.
 - **Phase by phase** — Start with a 3rd party or internal option for early experiments (e.g. review agents only); decide later whether to replace or extend with custom infrastructure as autonomy expands.
-- **By agent type** — Triage and review agents might run on one platform (e.g. event-driven, short-lived); implementation agents that need more tooling and longer runs might need a different environment.
+- **By agent type** — Triage and review agents might run on one platform (e.g. event-driven, short-lived); code agents that need more tooling and longer runs might need a different environment.
 
 ## Kubernetes SIG Agent Sandbox
 

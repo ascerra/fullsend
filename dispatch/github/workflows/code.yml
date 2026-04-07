@@ -1,0 +1,44 @@
+name: Code
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: fullsend-code-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  code:
+    name: Code
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'ready-to-code') ||
+      (github.event_name == 'issue_comment' && (
+        startsWith(github.event.comment.body || '', '/code ') ||
+        (github.event.comment.body || '') == '/code'
+      ))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FULLSEND_CODE_BOT_TOKEN }}
+          fetch-depth: 1
+
+      - name: Setup agent environment
+        env:
+          STAGE_PREFIX: CODE_
+          CODE_FULLSEND_CODE_BOT_TOKEN: ${{ secrets.FULLSEND_CODE_BOT_TOKEN }}
+        run: bash .github/scripts/setup-agent-env.sh
+
+      - name: Run code agent(s)
+        uses: ./.github/actions/fullsend
+        with:
+          stage: code

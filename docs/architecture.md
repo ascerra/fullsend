@@ -31,7 +31,7 @@ Infrastructure platform choice and configuration are specified in the adopting o
 **Open questions:**
 
 - Do we adopt a 3rd party platform, use existing internal infrastructure, or build our own? (See [agent-infrastructure.md](problems/agent-infrastructure.md) for the three directions.)
-- Can different agent types (short-lived review vs. long-running implementation) run on different infrastructure?
+- Can different agent types (short-lived review vs. long-running code) run on different infrastructure?
 - Who in the org owns and operates this, and how does it relate to existing platform or CI ownership?
 - Should model and MCP (or other tool-protocol) traffic from agent runtimes go through a **shared gateway** for authentication, spend limits, allowlists, and telemetry? (See [landscape.md](landscape.md#agent-gateway).)
 
@@ -104,7 +104,7 @@ The existing design principle is that [the repo is the coordinator](problems/age
 
 **Open questions:**
 
-- Is GitHub's event system sufficient, or do we need additional coordination logic (e.g. to prevent two implementation agents from picking up the same issue)?
+- Is GitHub's event system sufficient, or do we need additional coordination logic (e.g. to prevent two code agents from picking up the same issue)?
 - How does work assignment interact with the backlog/priority agent described in [agent-architecture.md](problems/agent-architecture.md)?
 - What happens when work needs to be cancelled, retried, or reassigned?
 - Does the coordinator need state (a queue, a lock, a claim system), or can it be stateless and event-driven?
@@ -177,7 +177,7 @@ ADR 0002: [Building block 1](ADRs/0002-initial-fullsend-design.md#1-webhook--dis
 
 ### 2. Slash-command parser + ACL
 
-Parses `/triage`, `/implement`, `/review`, and related commands and enforces who is allowed to invoke each.
+Parses `/triage`, `/code`, `/review`, and related commands and enforces who is allowed to invoke each.
 ADR 0002: [Building block 2](ADRs/0002-initial-fullsend-design.md#2-slash-command-parser--acl).
 
 ### 3. Label state machine guard
@@ -205,19 +205,19 @@ ADR 0002: [Building block 6](ADRs/0002-initial-fullsend-design.md#6-repro-sandbo
 Formats triage test artifacts in repo-native conventions for PR handoff.
 ADR 0002: [Building block 7](ADRs/0002-initial-fullsend-design.md#7-test-artifact-formatter).
 
-### 8. implementation agent runtime
+### 8. code agent runtime
 
 Implements changes, runs local/CI-equivalent tests, handles check failures, and advances handoff to **Review** (`ready-for-review`).
 ADR 0002: [Building block 8](ADRs/0002-initial-fullsend-design.md#8-implementation-agent-runtime).
 
 ### 9. PR sandbox / CI mirror
 
-Execution environment for **Implementation** and test loops, aligned to contributor/CI toolchains.
+Execution environment for **Code** and test loops, aligned to contributor/CI toolchains.
 ADR 0002: [Building block 9](ADRs/0002-initial-fullsend-design.md#9-pr-sandbox--ci-mirror).
 
 ### 10. Check failure triage
 
-Fetches and classifies failing check logs to guide **implementation agent** remediation loops.
+Fetches and classifies failing check logs to guide **code agent** remediation loops.
 ADR 0002: [Building block 10](ADRs/0002-initial-fullsend-design.md#10-check-failure-triage).
 
 ### 11. review agent runtime
@@ -230,12 +230,12 @@ ADR 0002: [Building block 11](ADRs/0002-initial-fullsend-design.md#11-review-age
 Aggregates review verdicts and applies labels:
 
 - unanimous approve-merge → `ready-for-merge` (for the **current** PR head at the end of that round only)
-- unanimous rework → `ready-to-implement`
+- unanimous rework → `ready-to-code`
 - split/conflicting (including conflicting security severities) → `requires-manual-review`
 - each **review run start** (including push-triggered re-review) clears **`ready-for-merge`** together with **`ready-for-review`** so merge approval is never stale after new commits
 ADR 0002: [Building block 12](ADRs/0002-initial-fullsend-design.md#12-coordinator-merge-algorithm).
 
 ### 13. Observability
 
-Traceability layer across issue, **Triage**, **Implementation**, **Review**, checks, and merge for incident response and correlation across automation runs.
+Traceability layer across issue, **Triage**, **Code**, **Review**, checks, and merge for incident response and correlation across automation runs.
 ADR 0002: [Building block 13](ADRs/0002-initial-fullsend-design.md#13-observability).

@@ -51,7 +51,7 @@ Takes a fundamentally different angle: stacked PRs. Instead of reviewing one mas
 
 **Merge queue:** Stack-aware merge queue batches and tests multiple PRs in parallel. "Merge when ready" auto-pilots stack merges once approved — but approval is still human.
 
-**Relevance to fullsend:** The stacked PR insight is important for our implementation agents. Smaller, focused changes are easier for review sub-agents to evaluate with confidence. If implementation agents produce stacked PRs rather than monolithic ones, the review problem becomes more tractable. The merge queue concept is also relevant — our system needs something similar for sequencing autonomous merges.
+**Relevance to fullsend:** The stacked PR insight is important for our code agents. Smaller, focused changes are easier for review sub-agents to evaluate with confidence. If code agents produce stacked PRs rather than monolithic ones, the review problem becomes more tractable. The merge queue concept is also relevant — our system needs something similar for sequencing autonomous merges.
 
 ### Qodo (formerly PR-Agent)
 
@@ -103,7 +103,7 @@ Launched November 2025. The closest thing in the industry to autonomous merging.
 
 ## Production agent orchestration systems
 
-While the tools above focus on code review, a separate category of systems addresses end-to-end agent orchestration — from task intake through implementation and merge. These are closer to the fullsend vision than review-only tools.
+While the tools above focus on code review, a separate category of systems addresses end-to-end agent orchestration — from task intake through coding and merge. These are closer to the fullsend vision than review-only tools.
 
 ### Stripe Minions
 

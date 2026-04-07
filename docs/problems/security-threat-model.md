@@ -205,9 +205,9 @@ This cross-cutting nature is why the model-as-toolchain risk deserves explicit t
 A compromised or manipulated agent crafts its output (PR content, review comments, commit messages) specifically to influence other agents downstream. Unlike external prompt injection, this exploits the implicit trust between agents in the system.
 
 Examples:
-- An implementation agent embeds instructions in code comments that manipulate the review agent into approving
+- A code agent embeds instructions in code comments that manipulate the review agent into approving
 - A triage agent crafts issue labels or descriptions that bias the prioritization agent
-- A review agent's feedback is crafted to make the implementation agent introduce a vulnerability in its "fix"
+- A review agent's feedback is crafted to make the code agent introduce a vulnerability in its "fix"
 
 ### Why it's dangerous
 
@@ -305,13 +305,13 @@ An attacker triggers excessive consumption of compute, API tokens, or event-proc
 
 **Event flooding:**
 - Rapidly filing issues, posting comments, toggling labels, or creating PRs to trigger agent invocations at scale
-- Abusing slash commands (`/triage`, `/implement`) to queue expensive operations
+- Abusing slash commands (`/triage`, `/code`) to queue expensive operations
 - Creating issues in bulk across multiple repos in an organization to saturate shared infrastructure
 
 **Cost amplification:**
 - Crafting issues that cause maximum LLM token consumption (extremely long descriptions, requests for exhaustive analysis)
-- Triggering implementation agents on problems designed to maximize iteration loops (ambiguous requirements that never converge)
-- Exploiting the implement-review feedback loop to cause unbounded cycles between agents
+- Triggering code agents on problems designed to maximize iteration loops (ambiguous requirements that never converge)
+- Exploiting the code-review feedback loop to cause unbounded cycles between agents
 - Filing issues that reference enormous external documents (via URLs) that the agent will attempt to fetch and process
 
 **Cascade amplification:**
@@ -338,7 +338,7 @@ Agentic systems are uniquely vulnerable to DOS because:
 Agentic DOS requires defenses beyond standard infrastructure hardening (sandbox resource quotas via cgroups/Kata Containers, compute limits). The following focus on what is unique to this context:
 
 - **Cost budgets** — set per-repo and per-org budgets for LLM API token consumption. When a budget threshold is reached, require human approval before further agent invocations.
-- **Loop circuit breakers** — enforce hard limits on implement-review cycles. The entry point script should enforce these limits deterministically, not rely on the agent's self-restraint.
+- **Loop circuit breakers** — enforce hard limits on code-review cycles. The entry point script should enforce these limits deterministically, not rely on the agent's self-restraint.
 - **Event debouncing and deduplication** — collapse rapid-fire events on the same issue/PR into a single agent invocation rather than spawning one per event.
 - **Tiered response based on actor trust** — events from non-org-members or new contributors could be subject to stricter rate limits or require human approval before triggering agents.
 - **Input size limits** — cap the size of issue descriptions, comments, and referenced content that agents will process. Truncate or reject inputs above a threshold.

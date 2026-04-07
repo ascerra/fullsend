@@ -15,7 +15,7 @@ See [architecture.md](architecture.md) and [agent-infrastructure.md](problems/ag
 
 ### Agent Registry
 
-The catalog of available agent roles and their configurations. It bridges the abstract roles defined in the agent architecture (triage, implementation, review) and the concrete runtime configurations the harness uses to instantiate each agent. Fullsend provides a base set; adopting organizations extend it via their `.fullsend` repository.
+The catalog of available agent roles and their configurations. It bridges the abstract roles defined in the agent architecture (triage, code, review) and the concrete runtime configurations the harness uses to instantiate each agent. Fullsend provides a base set; adopting organizations extend it via their `.fullsend` repository.
 See [architecture.md](architecture.md).
 
 ### Agent Runtime
@@ -62,7 +62,7 @@ A workflow concept where a repository automatically stays up-to-date with depend
 
 ### Flapping
 
-When agents enter a cycle of conflicting feedback that prevents convergence. Example: the security review agent rejects what the implementation agent produces to satisfy the correctness review agent, and vice versa, creating an oscillating loop. Flapping is a primary trigger for [escalation](#escalation) — after a configurable number of cycles, the system stops and routes to humans.
+When agents enter a cycle of conflicting feedback that prevents convergence. Example: the security review agent rejects what the code agent produces to satisfy the correctness review agent, and vice versa, creating an oscillating loop. Flapping is a primary trigger for [escalation](#escalation) — after a configurable number of cycles, the system stops and routes to humans.
 See [autonomy-spectrum.md](problems/autonomy-spectrum.md).
 
 ## H
@@ -83,7 +83,7 @@ See [architecture.md](architecture.md) and [agent-architecture.md](problems/agen
 
 ### Label State Machine
 
-The set of valid label transitions on issues and PRs that encode workflow state. Labels like `ready-to-implement`, `ready-for-review`, `ready-for-merge`, and `requires-manual-review` are control markers that drive agent dispatch and enforce ordering. The label state machine guard validates that transitions are legal and enforces mutual exclusion — for example, starting a triage run clears downstream labels so stale state does not carry forward.
+The set of valid label transitions on issues and PRs that encode workflow state. Labels like `ready-to-code`, `ready-for-review`, `ready-for-merge`, and `requires-manual-review` are control markers that drive agent dispatch and enforce ordering. The label state machine guard validates that transitions are legal and enforces mutual exclusion — for example, starting a triage run clears downstream labels so stale state does not carry forward.
 See [ADR 0002](ADRs/0002-initial-fullsend-design.md) building block 3.
 
 ## M
@@ -114,9 +114,9 @@ See [architecture.md](architecture.md) and [governance.md](problems/governance.m
 
 ## R
 
-### Ready to Implement
+### Ready to Code
 
-A label indicating an issue has passed triage and is cleared for the implementation agent to begin work. It is a key transition point in the [label state machine](#label-state-machine) — the triage agent sets it after confirming the issue is not a duplicate, is reproducible (if applicable), is a bug (not a feature, unless features are in scope), and has sufficient detail for implementation. The implementation agent watches for this label as its trigger to begin work.
+A label indicating an issue has passed triage and is cleared for the code agent to begin work. It is a key transition point in the [label state machine](#label-state-machine) — the triage agent sets it after confirming the issue is not a duplicate, is reproducible (if applicable), is a bug (not a feature, unless features are in scope), and has sufficient detail for the code agent. The code agent watches for this label as its trigger to begin work.
 See [ADR 0002](ADRs/0002-initial-fullsend-design.md).
 
 ### Rework Rate
@@ -142,7 +142,7 @@ See [architecture.md](architecture.md) and [codebase-context.md](problems/codeba
 
 ### Stage
 
-A higher-level workflow component in the fullsend pipeline (e.g., triage, implementation, review). The team formally chose "stage" over "phase" to avoid overloading the general SDLC use of "phase" and to maintain distinct vocabulary from Tekton's pipeline/task/step hierarchy, since fullsend may run on Tekton infrastructure. Each stage contains one or more [steps](#step).
+A higher-level workflow component in the fullsend pipeline (e.g., triage, code, review). The team formally chose "stage" over "phase" to avoid overloading the general SDLC use of "phase" and to maintain distinct vocabulary from Tekton's pipeline/task/step hierarchy, since fullsend may run on Tekton infrastructure. Each stage contains one or more [steps](#step).
 See [ADR 0002](ADRs/0002-initial-fullsend-design.md).
 
 ### Step
@@ -152,7 +152,7 @@ See [ADR 0002](ADRs/0002-initial-fullsend-design.md).
 
 ### Slash Command
 
-A GitHub comment in the form `/triage`, `/implement`, `/review`, etc., that manually triggers an agent workflow. Slash commands are parsed by the entry point and gated by an ACL — not every user can invoke every command. They provide an explicit human-initiated trigger alongside the automatic label-based triggers.
+A GitHub comment in the form `/triage`, `/code`, `/review`, etc., that manually triggers an agent workflow. Slash commands are parsed by the entry point and gated by an ACL — not every user can invoke every command. They provide an explicit human-initiated trigger alongside the automatic label-based triggers.
 See [ADR 0002](ADRs/0002-initial-fullsend-design.md) building block 2.
 
 ## T
@@ -164,7 +164,7 @@ See [architecture.md](architecture.md) (building block 1).
 
 ### Triage
 
-In fullsend, triage means routing, deduplicating, assessing completeness, and checking reproducibility — **not** fixing. The triage agent reads the issue, determines if it is a duplicate, assesses whether it is a bug or a feature (and denies if features are not in scope), checks if the issue has enough detail for implementation, and optionally attempts reproduction. The scope of triage has been a recurring discussion point, particularly around whether reproducibility and test generation belong in triage or implementation.
+In fullsend, triage means routing, deduplicating, assessing completeness, and checking reproducibility — **not** fixing. The triage agent reads the issue, determines if it is a duplicate, assesses whether it is a bug or a feature (and denies if features are not in scope), checks if the issue has enough detail for the code agent, and optionally attempts reproduction. The scope of triage has been a recurring discussion point, particularly around whether reproducibility and test generation belong in triage or implementation.
 See [ADR 0002](ADRs/0002-initial-fullsend-design.md) building block 4 and [#86](https://github.com/fullsend-ai/fullsend/issues/86).
 
 ### Trust
@@ -182,12 +182,12 @@ See [security-threat-model.md](problems/security-threat-model.md) and [agent-arc
 
 ### Work Coordinator
 
-The mechanism that assigns work to agents and prevents conflicts. The existing design principle is that the **repo is the coordinator** — branch protection, CODEOWNERS, status checks, and GitHub events provide coordination without a central orchestrator. The work coordinator may be just the glue connecting GitHub webhooks to agent infrastructure, or it may need to be more (e.g., a claim/lock system to prevent two implementation agents from picking up the same issue).
+The mechanism that assigns work to agents and prevents conflicts. The existing design principle is that the **repo is the coordinator** — branch protection, CODEOWNERS, status checks, and GitHub events provide coordination without a central orchestrator. The work coordinator may be just the glue connecting GitHub webhooks to agent infrastructure, or it may need to be more (e.g., a claim/lock system to prevent two code agents from picking up the same issue).
 See [architecture.md](architecture.md) and [#77](https://github.com/fullsend-ai/fullsend/issues/77).
 
 ## Z
 
 ### Zero Trust
 
-In fullsend's agent-to-agent model, zero trust means **nothing is trusted implicitly based on identity alone**. It does **not** mean "accept zero inputs" or "block everything." Every agent assumes every other agent — and every external input — could be compromised. The implementation agent assumes the triage output may contain prompt injection. The review agent assumes the submitted PR is designed to trick it. Defense is layered: input sanitization, scoped permissions, sandbox containment, and output validation all work together.
+In fullsend's agent-to-agent model, zero trust means **nothing is trusted implicitly based on identity alone**. It does **not** mean "accept zero inputs" or "block everything." Every agent assumes every other agent — and every external input — could be compromised. The code agent assumes the triage output may contain prompt injection. The review agent assumes the submitted PR is designed to trick it. Defense is layered: input sanitization, scoped permissions, sandbox containment, and output validation all work together.
 See [security-threat-model.md](problems/security-threat-model.md) (Threat 5) and [#102](https://github.com/fullsend-ai/fullsend/issues/102).

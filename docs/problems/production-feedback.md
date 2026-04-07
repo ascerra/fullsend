@@ -53,7 +53,7 @@ Correlating user-reported problems with platform signals serves two purposes:
 
 **Review agent** uses platform reliability history to calibrate scrutiny on PRs. A code path responsible for a high fraction of recent scheduling timeouts or failure spikes warrants deeper edge-case analysis than a low-traffic utility. This also feeds tier classification — a "bug fix" touching a historically high-blast-radius path may warrant Tier 2 treatment regardless of how the issue was filed.
 
-**Implementation agent** uses failure logs, error distributions, and timing correlation as starting context — richer than a human-written issue. The agent can correlate log patterns to code paths and generate a root cause hypothesis before writing any code.
+**Code agent** uses failure logs, error distributions, and timing correlation as starting context — richer than a human-written issue. The agent can correlate log patterns to code paths and generate a root cause hypothesis before writing any code.
 
 **Post-merge validation** is where the loop closes. A fix that passes CI but doesn't move the platform failure rate has not solved the problem. If the signal doesn't return to baseline after deploy, the issue re-opens and the agent flags for human review.
 
@@ -68,7 +68,7 @@ Triage agent detects pattern, creates issue with signal data
         ↓
 Priority agent weights issue by impact breadth
         ↓
-Implementation agent uses failure logs as context, implements fix
+Code agent uses failure logs as context, implements fix
         ↓
 Review agents evaluate change, with execution-informed risk context
         ↓
@@ -101,11 +101,11 @@ Without reliable attribution, the triage agent files issues for problems the pla
 
 **Alert fatigue at agent scale**: Filing an issue for every anomalous signal generates more work than can be absorbed. The triage agent needs minimum thresholds on duration, breadth, and statistical significance before acting.
 
-**False-positive remediation loops**: When attribution misclassifies a user error or supply chain change as a platform bug, the implementation agent proposes a fix. The fix merges, deploys, and the signal is unchanged — because the root cause was never in the platform's code. The issue re-opens and the cycle repeats. Each iteration adds real codebase changes that increase complexity without improving reliability. If reviewers see repeated small patches to the same area with no visible effect, they may begin rubber-stamping — eroding the oversight that would otherwise catch the loop.
+**False-positive remediation loops**: When attribution misclassifies a user error or supply chain change as a platform bug, the code agent proposes a fix. The fix merges, deploys, and the signal is unchanged — because the root cause was never in the platform's code. The issue re-opens and the cycle repeats. Each iteration adds real codebase changes that increase complexity without improving reliability. If reviewers see repeated small patches to the same area with no visible effect, they may begin rubber-stamping — eroding the oversight that would otherwise catch the loop.
 
 Detection requires two complementary stopping conditions. First, iteration count: if post-merge validation shows no improvement across N consecutive iterations on the same signal, the loop must halt and escalate to human investigation. Second, cost budget: each iteration burns compute resources and token budget — CI runs, agent context processing, code review cycles. A runaway loop is not just an oversight risk; it is a measurable resource cost. Budget exhaustion per signal (e.g., cumulative agent cost above a threshold for a single issue lineage) should be an independent stopping condition, not a consequence of hitting the iteration cap. Both limits must be built in explicitly and both must trigger escalation, not silent abandonment.
 
-Prevention: the triage agent should not generate an implementation-ready issue without sufficient corroborating evidence — a correlated deploy event, minimum cross-tenant breadth, signal-to-noise ratio above threshold, and failure log content consistent with a platform origin. Below that threshold, the output is a flagged observation for human triage, not an actionable issue.
+Prevention: the triage agent should not generate a code-ready issue without sufficient corroborating evidence — a correlated deploy event, minimum cross-tenant breadth, signal-to-noise ratio above threshold, and failure log content consistent with a platform origin. Below that threshold, the output is a flagged observation for human triage, not an actionable issue.
 
 ## Product discovery signals
 

@@ -9,7 +9,7 @@ branding:
 
 inputs:
   stage:
-    description: Pipeline stage passed to fullsend (e.g. triage, implementation, review).
+    description: Pipeline stage passed to fullsend (e.g. triage, code, review).
     required: true
   scm:
     description: Value for fullsend --scm (optional; defaults to github).

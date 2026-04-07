@@ -18,13 +18,13 @@ Code review happens twice — before and after PR submission. Both phases run th
 
 ### Phase 1: Pre-PR review (shift left)
 
-Before the implementation agent commits or opens a PR, it invokes the review sub-agents locally. This catches problems before they consume attention at the PR level. The implementation agent iterates on its own work — fixing issues, improving test coverage, addressing security concerns — before exposing the change to the broader system.
+Before the code agent commits or opens a PR, it invokes the review sub-agents locally. This catches problems before they consume attention at the PR level. The code agent iterates on its own work — fixing issues, improving test coverage, addressing security concerns — before exposing the change to the broader system.
 
 This is a normal pattern for humans using coding agents today. It produces higher quality output faster and wastes fewer resources.
 
 ### Phase 2: PR-level review (the actual gate)
 
-The PR is open. Review sub-agents evaluate it with no special trust granted because the code came from an implementation agent that already ran pre-PR review. The PR-level review is a fully independent evaluation — not a rubber stamp of Phase 1.
+The PR is open. Review sub-agents evaluate it with no special trust granted because the code came from a code agent that already ran pre-PR review. The PR-level review is a fully independent evaluation — not a rubber stamp of Phase 1.
 
 The review process is identical whether the PR author is an agent or a human. The review agents don't know or care about authorship. They evaluate:
 
@@ -113,7 +113,7 @@ Evaluates adherence to repo-specific patterns and conventions.
 - Naming conventions, API patterns, error handling idioms
 - Documentation adequacy
 
-**Context needed:** The diff, repo style guides, examples of existing patterns. This is the lowest-stakes review concern and could potentially be handled by the implementation agent's pre-PR self-review rather than a separate sub-agent.
+**Context needed:** The diff, repo style guides, examples of existing patterns. This is the lowest-stakes review concern and could potentially be handled by the code agent's pre-PR self-review rather than a separate sub-agent.
 
 ## How sub-agents compose a decision
 
@@ -135,7 +135,7 @@ Each sub-agent produces a score. A weighted aggregate determines the outcome. Se
 
 ### Veto-based with tiers
 
-Security and intent agents have veto power (any rejection blocks). Correctness and style agents can flag concerns but not block — their concerns are surfaced for human review or implementation agent iteration.
+Security and intent agents have veto power (any rejection blocks). Correctness and style agents can flag concerns but not block — their concerns are surfaced for human review or code agent iteration.
 
 **Pros:** Balances safety with throughput. Security is non-negotiable, style is advisory.
 **Cons:** Still need to define what counts as a "security" concern vs. a "correctness" concern. Boundary is fuzzy.
