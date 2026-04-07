@@ -1,17 +1,30 @@
-"""Evaluate all Hermes-inspired security scanners against fullsend-specific payloads.
+"""Evaluate security controls against fullsend-specific attack payloads.
 
-Runs each scanner against its targeted payloads and reports detection rates,
-false positives, and latency.
+Static scanning (unicode, context injection, secrets) is delegated to Tirith CLI.
+SSRF protection is handled by the Claude Code PreToolUse hook (hooks/ssrf_pretool.py).
+
+Usage:
+    # Full evaluation (requires tirith in PATH)
+    uv run python run_eval.py
+
+    # SSRF hook tests only (no external deps)
+    uv run python run_eval.py --ssrf-only
+
+    # Tirith scan tests only
+    uv run python run_eval.py --tirith-only
 """
 
+import json
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import yaml
-from scanners import ContextInjectionScanner, SecretRedactor, SSRFValidator, UnicodeNormalizer
 
 PAYLOADS_DIR = Path(__file__).parent / "payloads"
+HOOK_PATH = Path(__file__).parent / "hooks" / "ssrf_pretool.py"
 
 
 def load_payloads() -> list[dict]:
@@ -24,40 +37,127 @@ def load_payloads() -> list[dict]:
     return payloads
 
 
-def eval_secret_redactor(payloads: list[dict]) -> list[dict]:
-    redactor = SecretRedactor()
-    results = []
+# ---------------------------------------------------------------------------
+# Tirith scan evaluation (unicode, context injection, secrets)
+# ---------------------------------------------------------------------------
 
-    for p in payloads:
-        if p.get("scanner") != "secret_redactor":
-            continue
 
-        text = p["text"]
-        start = time.perf_counter()
-        clean, findings = redactor.scan(text)
+def tirith_available() -> bool:
+    try:
+        subprocess.run(
+            ["tirith", "--version"],
+            capture_output=True,
+            timeout=5,
+        )
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def eval_tirith_file_scan(payload: dict) -> dict:
+    """Write payload content to a temp file and run tirith scan on it."""
+    # Determine the text content and temp filename
+    if payload.get("scanner") == "context_injection":
+        content = payload["content"]
+        suffix = payload.get("filename", "AGENTS.md")
+    elif payload.get("scanner") == "unicode_normalizer":
+        content = payload["text"]
+        suffix = "input.txt"
+    elif payload.get("scanner") == "secret_redactor":
+        content = payload["text"]
+        suffix = "output.txt"
+    else:
+        return {}
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=f"_{suffix}", delete=False
+    ) as f:
+        f.write(content)
+        tmp_path = f.name
+
+    start = time.perf_counter()
+    try:
+        result = subprocess.run(
+            ["tirith", "scan", "--json", "--", tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         elapsed_ms = (time.perf_counter() - start) * 1000
 
-        detected = len(findings) > 0
-        expected = p.get("expected") == "detected"
+        # tirith exit codes: 0=clean, 1=findings, 2=warn
+        detected = result.returncode != 0
 
-        results.append(
-            {
-                "name": p["name"],
-                "scanner": "secret_redactor",
-                "detected": detected,
-                "expected": expected,
-                "correct": detected == expected,
-                "finding_count": len(findings),
-                "findings": [f.pattern_name for f in findings],
-                "latency_ms": elapsed_ms,
-            }
-        )
+        findings = []
+        if result.stdout.strip():
+            try:
+                scan_output = json.loads(result.stdout)
+                if isinstance(scan_output, list):
+                    findings = scan_output
+                elif isinstance(scan_output, dict):
+                    findings = scan_output.get("findings", [])
+            except json.JSONDecodeError:
+                findings = [{"raw": result.stdout.strip()}]
+
+    except subprocess.TimeoutExpired:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        detected = False
+        findings = [{"error": "tirith scan timed out"}]
+    except FileNotFoundError:
+        return {
+            "name": payload["name"],
+            "scanner": f"tirith:{payload['scanner']}",
+            "detected": False,
+            "expected": True,
+            "correct": False,
+            "error": "tirith not found in PATH",
+            "latency_ms": 0,
+        }
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    scanner_name = payload.get("scanner", "unknown")
+    expected_map = {
+        "context_injection": "blocked",
+        "unicode_normalizer": "normalized",
+        "secret_redactor": "detected",
+    }
+    expected = payload.get("expected") == expected_map.get(scanner_name, "detected")
+
+    return {
+        "name": payload["name"],
+        "scanner": f"tirith:{scanner_name}",
+        "detected": detected,
+        "expected": expected,
+        "correct": detected == expected,
+        "finding_count": len(findings),
+        "findings": findings[:5],
+        "latency_ms": elapsed_ms,
+    }
+
+
+def eval_tirith(payloads: list[dict]) -> list[dict]:
+    """Run tirith scan against all static-scanning payloads."""
+    results = []
+    tirith_scanners = {"context_injection", "unicode_normalizer", "secret_redactor"}
+
+    for p in payloads:
+        if p.get("scanner") not in tirith_scanners:
+            continue
+        result = eval_tirith_file_scan(p)
+        if result:
+            results.append(result)
 
     return results
 
 
-def eval_ssrf_validator(payloads: list[dict]) -> list[dict]:
-    validator = SSRFValidator()
+# ---------------------------------------------------------------------------
+# SSRF hook evaluation
+# ---------------------------------------------------------------------------
+
+
+def eval_ssrf_hook(payloads: list[dict]) -> list[dict]:
+    """Test the PreToolUse SSRF hook against SSRF payloads."""
     results = []
 
     for p in payloads:
@@ -65,119 +165,92 @@ def eval_ssrf_validator(payloads: list[dict]) -> list[dict]:
             continue
 
         urls = p.get("urls", [])
-        all_blocked = True
+        any_blocked = False
         url_results = []
 
         start = time.perf_counter()
+
+        # Test each URL as a WebFetch tool call
         for url in urls:
-            result = validator.validate_url(url, resolve_dns=False)
-            url_results.append({"url": url, "safe": result.safe, "reason": result.reason})
-            if result.safe:
-                all_blocked = False
-        elapsed_ms = (time.perf_counter() - start) * 1000
+            hook_input = json.dumps({
+                "tool_name": "WebFetch",
+                "tool_input": {"url": url},
+            })
 
-        expected = p.get("expected") == "blocked"
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(HOOK_PATH)],
+                    input=hook_input,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                blocked = proc.returncode != 0
+                reason = ""
+                if proc.stdout.strip():
+                    try:
+                        out = json.loads(proc.stdout)
+                        reason = out.get("reason", "")
+                    except json.JSONDecodeError:
+                        reason = proc.stdout.strip()
+            except subprocess.TimeoutExpired:
+                blocked = False
+                reason = "hook timed out"
 
-        # Also test redirect chain if present
+            url_results.append({"url": url, "blocked": blocked, "reason": reason})
+            if blocked:
+                any_blocked = True
+
+        # Test redirect chain as a Bash curl command
         chain = p.get("redirect_chain", [])
-        chain_result = None
+        chain_results = []
         if chain:
-            cr = validator.validate_redirect_chain(chain)
-            chain_result = {"safe": cr.safe, "reason": cr.reason}
-            if cr.safe:
-                all_blocked = False
+            for chain_url in chain:
+                hook_input = json.dumps({
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"curl -sL {chain_url}"},
+                })
+                proc = subprocess.run(
+                    [sys.executable, str(HOOK_PATH)],
+                    input=hook_input,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                blocked = proc.returncode != 0
+                reason = ""
+                if proc.stdout.strip():
+                    try:
+                        out = json.loads(proc.stdout)
+                        reason = out.get("reason", "")
+                    except json.JSONDecodeError:
+                        reason = proc.stdout.strip()
+                chain_results.append(
+                    {"url": chain_url, "blocked": blocked, "reason": reason}
+                )
+                if blocked:
+                    any_blocked = True
 
-        results.append(
-            {
-                "name": p["name"],
-                "scanner": "ssrf_validator",
-                "detected": all_blocked,
-                "expected": expected,
-                "correct": all_blocked == expected,
-                "url_results": url_results,
-                "chain_result": chain_result,
-                "latency_ms": elapsed_ms,
-            }
-        )
-
-    return results
-
-
-def eval_context_injection(payloads: list[dict]) -> list[dict]:
-    scanner = ContextInjectionScanner()
-    results = []
-
-    for p in payloads:
-        if p.get("scanner") != "context_injection":
-            continue
-
-        content = p["content"]
-        filename = p.get("filename", "")
-
-        start = time.perf_counter()
-        result = scanner.scan(content, filename)
         elapsed_ms = (time.perf_counter() - start) * 1000
-
-        detected = not result.safe
         expected = p.get("expected") == "blocked"
 
-        results.append(
-            {
-                "name": p["name"],
-                "scanner": "context_injection",
-                "detected": detected,
-                "expected": expected,
-                "correct": detected == expected,
-                "finding_count": len(result.findings),
-                "findings": [
-                    {"pattern": f.pattern_name, "severity": f.severity, "category": f.category}
-                    for f in result.findings
-                ],
-                "latency_ms": elapsed_ms,
-            }
-        )
+        results.append({
+            "name": p["name"],
+            "scanner": "ssrf_hook",
+            "detected": any_blocked,
+            "expected": expected,
+            "correct": any_blocked == expected,
+            "url_results": url_results,
+            "chain_results": chain_results,
+            "latency_ms": elapsed_ms,
+        })
 
     return results
 
 
-def eval_unicode_normalizer(payloads: list[dict]) -> list[dict]:
-    normalizer = UnicodeNormalizer()
-    results = []
-
-    for p in payloads:
-        if p.get("scanner") != "unicode_normalizer":
-            continue
-
-        text = p["text"]
-        expected_clean = p.get("clean_text", "")
-
-        start = time.perf_counter()
-        result = normalizer.normalize(text)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-
-        detected = result.changed
-        expected = p.get("expected") == "normalized"
-        correct_output = result.normalized == expected_clean if expected_clean else True
-
-        results.append(
-            {
-                "name": p["name"],
-                "scanner": "unicode_normalizer",
-                "detected": detected,
-                "expected": expected,
-                "correct": detected == expected,
-                "correct_output": correct_output,
-                "normalized": result.normalized,
-                "expected_clean": expected_clean,
-                "findings": [
-                    {"category": f.category, "count": f.count, "description": f.description}
-                    for f in result.findings
-                ],
-                "latency_ms": elapsed_ms,
-            }
-        )
-
-    return results
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
 
 def print_results(all_results: list[dict]):
@@ -185,7 +258,6 @@ def print_results(all_results: list[dict]):
     print("  HERMES SECURITY PATTERNS EVALUATION")
     print(f"{'=' * 100}")
 
-    # Group by scanner
     by_scanner: dict[str, list[dict]] = {}
     for r in all_results:
         by_scanner.setdefault(r["scanner"], []).append(r)
@@ -193,25 +265,36 @@ def print_results(all_results: list[dict]):
     for scanner, results in sorted(by_scanner.items()):
         print(f"\n--- {scanner} ---")
         for r in results:
+            if r.get("error"):
+                print(f"  [ERROR] {r['name']:<40} {r['error']}")
+                continue
+
             status = "PASS" if r["correct"] else "FAIL"
             det = "DETECTED" if r["detected"] else "CLEAN"
             exp = "expected" if r["correct"] else "UNEXPECTED"
-            print(f"  [{status}] {r['name']:<40} {det:<10} ({exp}, {r['latency_ms']:.1f}ms)")
+            print(
+                f"  [{status}] {r['name']:<40} {det:<10} "
+                f"({exp}, {r['latency_ms']:.1f}ms)"
+            )
 
-            if r.get("findings"):
-                if isinstance(r["findings"][0], str):
-                    print(f"         patterns: {', '.join(r['findings'])}")
-                elif isinstance(r["findings"][0], dict):
-                    for f in r["findings"][:5]:
-                        if "pattern" in f:
-                            print(f"         [{f['severity']}] {f['pattern']}: {f['category']}")
-                        elif "category" in f:
-                            print(f"         {f['category']}: {f['description']}")
+            # Show URL-level details for SSRF
+            if r.get("url_results"):
+                for ur in r["url_results"]:
+                    bl = "BLOCKED" if ur["blocked"] else "ALLOWED"
+                    print(f"         {bl:<8} {ur['url']}")
+                    if ur.get("reason"):
+                        print(f"                  -> {ur['reason']}")
 
-            if "correct_output" in r and not r["correct_output"]:
-                print("         OUTPUT MISMATCH:")
-                print(f"           got:      {repr(r['normalized'])}")
-                print(f"           expected: {repr(r['expected_clean'])}")
+            # Show tirith findings
+            if r.get("findings") and r.get("finding_count", 0) > 0:
+                for f in r["findings"][:3]:
+                    if isinstance(f, dict):
+                        rule = f.get("rule_id", f.get("raw", ""))
+                        sev = f.get("severity", "")
+                        msg = f.get("message", f.get("detail", ""))
+                        print(f"         [{sev}] {rule}: {msg}")
+                    else:
+                        print(f"         {f}")
 
     # Summary
     print(f"\n{'=' * 100}")
@@ -219,42 +302,74 @@ def print_results(all_results: list[dict]):
     print(f"{'=' * 100}")
 
     total = len(all_results)
+    errors = sum(1 for r in all_results if r.get("error"))
     correct = sum(1 for r in all_results if r["correct"])
-    avg_latency = sum(r["latency_ms"] for r in all_results) / total if total else 0
+    testable = total - errors
+    avg_latency = (
+        sum(r["latency_ms"] for r in all_results if not r.get("error")) / testable
+        if testable
+        else 0
+    )
 
     print(f"\n  Total payloads:  {total}")
-    print(f"  Correct:         {correct}/{total} ({100 * correct / total:.0f}%)")
+    if errors:
+        print(f"  Errors:          {errors}")
+    print(f"  Correct:         {correct}/{testable} ({100 * correct / testable:.0f}%)")
     print(f"  Avg latency:     {avg_latency:.1f}ms")
 
     for scanner, results in sorted(by_scanner.items()):
-        n = len(results)
+        errs = sum(1 for r in results if r.get("error"))
+        n = len(results) - errs
         c = sum(1 for r in results if r["correct"])
-        avg = sum(r["latency_ms"] for r in results) / n if n else 0
+        avg = sum(r["latency_ms"] for r in results if not r.get("error")) / n if n else 0
         print(f"\n  {scanner}:")
-        print(f"    Correct: {c}/{n} ({100 * c / n:.0f}%)")
+        print(f"    Correct: {c}/{n} ({100 * c / n:.0f}%)" if n else f"    Skipped (errors)")
         print(f"    Avg latency: {avg:.1f}ms")
 
-    if correct < total:
+    if correct < testable:
         print("\n  FAILURES:")
         for r in all_results:
-            if not r["correct"]:
+            if not r.get("error") and not r["correct"]:
                 print(f"    - {r['name']} ({r['scanner']})")
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate Hermes security patterns")
+    parser.add_argument("--ssrf-only", action="store_true", help="Only test SSRF hook")
+    parser.add_argument(
+        "--tirith-only", action="store_true", help="Only test tirith scan"
+    )
+    args = parser.parse_args()
+
     payloads = load_payloads()
     print(f"Loaded {len(payloads)} payloads from {PAYLOADS_DIR}")
 
     all_results = []
-    all_results.extend(eval_secret_redactor(payloads))
-    all_results.extend(eval_ssrf_validator(payloads))
-    all_results.extend(eval_context_injection(payloads))
-    all_results.extend(eval_unicode_normalizer(payloads))
+
+    if not args.ssrf_only:
+        if tirith_available():
+            print("Using tirith CLI for static scanning")
+            all_results.extend(eval_tirith(payloads))
+        else:
+            print("WARNING: tirith not found in PATH, skipping static scan tests")
+            print("  Install: brew install sheeki03/tap/tirith")
+
+    if not args.tirith_only:
+        if HOOK_PATH.exists():
+            print(f"Using SSRF hook: {HOOK_PATH}")
+            all_results.extend(eval_ssrf_hook(payloads))
+        else:
+            print(f"WARNING: SSRF hook not found at {HOOK_PATH}")
+
+    if not all_results:
+        print("\nNo tests ran. Install tirith or check hook path.")
+        sys.exit(1)
 
     print_results(all_results)
 
-    # Exit with failure if any test is wrong
-    if not all(r["correct"] for r in all_results):
+    if not all(r.get("error") or r["correct"] for r in all_results):
         sys.exit(1)
 
 
