@@ -47,3 +47,33 @@ repos:
     rev: v1.7.11
     hooks:
       - id: actionlint
+
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: lint-adr-status
+        name: lint ADR statuses
+        entry: ./hack/lint-adr-status
+        language: script
+        files: ^docs/ADRs/.*\.md$
+        pass_filenames: false
+
+      - id: lint-adr-numbers
+        name: lint ADR numbers
+        entry: ./hack/lint-adr-numbers
+        language: script
+        files: ^docs/ADRs/.*\.md$
+        pass_filenames: false
+
+      - id: lint-adr-frontmatter
+        name: lint ADR frontmatter
+        entry: uv run --script ./hack/lint-adr-frontmatter
+        language: system
+        files: ^docs/ADRs/.*\.md$
+        pass_filenames: false

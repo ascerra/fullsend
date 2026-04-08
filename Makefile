@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap lint check fmt lint-adr-status lint-adr-numbers lint-adr-frontmatter \
+.PHONY: help bootstrap lint lint-all check fmt \
        mindmap go-build go-test go-lint go-fmt go-vet go-tidy e2e-test e2e-playwright \
        e2e-export-session e2e-upload-session
 
@@ -7,12 +7,10 @@ help:
 	@echo "Available targets:"
 	@echo "  help                 - Show this help message"
 	@echo "  bootstrap            - Install all development tools"
-	@echo "  lint                 - Run all linting and validation"
+	@echo "  lint                 - Run linting on staged changes"
+	@echo "  lint-all             - Run linting on all files"
 	@echo "  check                - Run ruff and ty checks on Python"
 	@echo "  fmt                  - Format Python code with ruff"
-	@echo "  lint-adr-status      - Validate ADR statuses in all ADR files"
-	@echo "  lint-adr-numbers     - Check for duplicate ADR numeric identifiers"
-	@echo "  lint-adr-frontmatter - Validate ADR frontmatter and cross-references"
 	@echo "  mindmap              - Open the interactive document graph in a browser"
 	@echo "  go-build             - Build the fullsend binary"
 	@echo "  go-test              - Run Go tests with race detection and coverage"
@@ -55,7 +53,11 @@ bootstrap:
 	@echo "==> Bootstrap complete!"
 	@echo "    Make sure $(BOOTSTRAP_BIN_DIR) is on your PATH."
 
-lint: check go-vet lint-adr-status lint-adr-numbers lint-adr-frontmatter
+lint:
+	pre-commit run
+
+lint-all:
+	pre-commit run --all-files
 
 check:
 	uvx ruff check .
@@ -63,15 +65,6 @@ check:
 
 fmt:
 	uvx ruff format .
-
-lint-adr-status:
-	@./hack/lint-adr-status
-
-lint-adr-numbers:
-	@./hack/lint-adr-numbers
-
-lint-adr-frontmatter:
-	@uv run --script ./hack/lint-adr-frontmatter
 
 mindmap:
 	@xdg-open docs/mindmap.html 2>/dev/null || open docs/mindmap.html 2>/dev/null || echo "Open docs/mindmap.html in your browser"
