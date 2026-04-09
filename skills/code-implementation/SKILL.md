@@ -22,7 +22,7 @@ verification (step 8) and committing (step 9) — do not skip these steps.
 Commands you will need during this procedure:
 
 - `git checkout`, `git add <file>`, `git diff`, `git commit` — branching and committing
-- `gh issue view`, `gh issue edit` — reading and updating issues
+- `gh issue view` — reading issues (read-only, no edits or comments)
 - `gh pr view`, `gh pr list`, `gh pr diff` — reading PR context
 - `make test`, `go test ./...`, `npm test`, `pytest` — running tests
 - `pre-commit run --files <files>` — linting and secret scanning
@@ -33,24 +33,25 @@ Use `Read`/`Write`/`Grep`/`Glob` for file operations. Do not use `sed` or
 
 ### Helper scripts
 
-This skill ships with a `scan-secrets` helper in `scripts/` (relative to
-this file). When the skill is deployed to a target repo, the script is at:
+The `scan-secrets` helper lives in the shared `scripts/` directory at
+the repository root:
 
 ```
-skills/code-implementation/scripts/scan-secrets
+scripts/scan-secrets
 ```
+
+The runner provisions this script alongside the agent and skills. If the
+harness or runner uses a different layout, the `SCAN_SECRETS` environment
+variable overrides the path.
 
 **Before starting step 8, verify the script exists and is executable:**
 
 ```bash
-test -x skills/code-implementation/scripts/scan-secrets
+test -x "${SCAN_SECRETS:-scripts/scan-secrets}"
 ```
 
 If the script is missing, **STOP**. Do not improvise a replacement or
-skip secret scanning. Post a comment on the issue stating that the
-skill's helper scripts are missing from the working directory, apply
-`requires-manual-review`, and stop. Secret scanning cannot be skipped
-or worked around.
+skip secret scanning. Secret scanning cannot be skipped or worked around.
 
 The script is **self-bootstrapping** and runner-agnostic. It works on
 GitHub Actions, Tekton, GitLab CI, or any environment with `bash`,
@@ -60,11 +61,11 @@ before running it.
 
 Two modes:
 
-- `skills/code-implementation/scripts/scan-secrets <files>` — stage,
-  scan, unstage. Use in step 8a for early detection during development.
-- `skills/code-implementation/scripts/scan-secrets --staged` — scan
-  whatever is in the index without modifying it. Use in step 9b as the
-  final gate before commit.
+- `"${SCAN_SECRETS:-scripts/scan-secrets}" <files>` — stage, scan,
+  unstage. Use in step 8a for early detection during development.
+- `"${SCAN_SECRETS:-scripts/scan-secrets}" --staged` — scan whatever is
+  in the index without modifying it. Use in step 9b as the final gate
+  before commit.
 
 **Steps 8 and 9 require Bash. Do not skip them.**
 
@@ -76,20 +77,21 @@ Follow these steps in order. Do not skip steps.
 
 Determine which issue to implement:
 
-- If an issue number, URL, or label event was provided, use it.
-- If none was provided, stop and report the failure rather than guessing.
+- If the `ISSUE_NUMBER` environment variable is set, use it.
+- Otherwise, if an issue number, URL, or label event was provided, use it.
+- If none was provided, stop rather than guessing.
 
 Fetch the issue:
 
 ```bash
-gh issue view <number> --json number,title,body,labels,comments,assignees
+gh issue view "${ISSUE_NUMBER}" --json number,title,body,labels,comments,assignees
 ```
 
 Record the **issue number**. You will reference it in the branch name and
 commit messages.
 
 If the issue does not have a `ready-to-code` label (or equivalent signal
-that triage is complete), stop and report that the issue has not been triaged.
+that triage is complete), stop.
 
 ### 2. Gather context
 
@@ -154,7 +156,14 @@ git branch -a | grep "agent/<number>-"
 
 ### 5. Create branch
 
-Create a feature branch from the target branch:
+If the `BRANCH_NAME` environment variable is set, use it:
+
+```bash
+git fetch origin
+git checkout -b "${BRANCH_NAME}" origin/<target-branch>
+```
+
+Otherwise, create a feature branch from the target branch:
 
 ```bash
 git fetch origin
@@ -221,7 +230,7 @@ and 9 to a subagent unless the subagent preserves this exact ordering.
 First, confirm the helper script is available:
 
 ```bash
-test -x skills/code-implementation/scripts/scan-secrets
+test -x "${SCAN_SECRETS:-scripts/scan-secrets}"
 ```
 
 If this fails, STOP — see the "Helper scripts" section above.
@@ -238,7 +247,7 @@ missing script, error), treat it as a failure and stop.**
 Run the secret scan helper against your changed files:
 
 ```bash
-skills/code-implementation/scripts/scan-secrets <files-you-modified>
+"${SCAN_SECRETS:-scripts/scan-secrets}" <files-you-modified>
 ```
 
 The script handles tool installation, staging, scanning, and unstaging
@@ -247,20 +256,12 @@ obtain a scanner.
 
 If secret scanning detects secrets in your changes:
 
-1. **Hard stop.** Do not run tests. Do not post any comment describing your
-   implementation. Do not commit.
+1. **Hard stop.** Do not run tests. Do not commit.
 2. Remove the secrets from your code. Replace them with environment variable
    references or placeholders.
 3. Re-run the secret scan. If it passes, continue to 8b.
 4. If you cannot remove the secrets (e.g., the issue itself requires handling
-   real credentials), post **only** this on the issue — no code, no diffs, no
-   file paths:
-
-```
-Implementation blocked: secret scanning failure. Requires manual review.
-```
-
-5. Apply the `requires-manual-review` label and stop.
+   real credentials), stop. The post-script handles failure reporting.
 
 **Only proceed to 8b after the secret scan passes.**
 
@@ -287,20 +288,9 @@ make lint        # or: pre-commit run --files <changed-files>
 
 **If the retry limit is reached and tests still fail:**
 
-1. Do not proceed to step 9.
-2. Post a comment on the issue with:
-   - A general description of the approach you took (no code snippets, no
-     diffs, no file contents — these could contain secrets that passed
-     scanning but should not be posted publicly)
-   - Which tests are failing (names only)
-   - Why you believe the issue requires human attention
-3. Apply the `requires-manual-review` label:
-
-```bash
-gh issue edit <number> --add-label "requires-manual-review"
-```
-
-4. Stop. Do not commit broken code.
+1. Do not proceed to step 9. Do not commit broken code.
+2. Stop. The post-script determines how to report the failure based on
+   your exit state and transcript.
 
 ### 9. Commit
 
@@ -332,7 +322,7 @@ git reset HEAD <file-you-did-not-intend-to-stage>
 Then run the secret scan against the actual staged content:
 
 ```bash
-skills/code-implementation/scripts/scan-secrets --staged
+"${SCAN_SECRETS:-scripts/scan-secrets}" --staged
 ```
 
 **This is not a repeat of step 8a.** Step 8a scans the files you *named*.
@@ -369,17 +359,25 @@ pre-commit hooks are part of the verification loop. If a pre-commit hook is
 failing on unmodified code (pre-existing failure), verify that it also fails
 on the base branch before skipping it.
 
-**Do not push the branch.** Pushing and PR creation are handled by the
-deterministic automation layer (workflow or script) that invoked you. Your
-job ends when the commit is clean and tests pass.
+**Do not push the branch.** Pushing, PR creation, failure reporting, and
+label management are handled by the post-script that runs after you exit.
+
+Your exit state is the handoff contract:
+- **Clean commit on the feature branch** → the post-script pushes and
+  creates the PR.
+- **No commit (stopped during verification)** → the post-script reads
+  your transcript and exit code to determine how to report the failure.
+
+Your job ends when the commit is clean and tests pass, or when you stop
+because verification failed beyond the retry limit.
 
 ## Constraints
 
 The agent definition (`agents/code.md`) is the authoritative list of
 prohibitions — what you cannot do. This skill does not restate them. The
-`scan-secrets` helper in `skills/code-implementation/scripts/` enforces
-the scan-before-test ordering with guaranteed cleanup. Other constraints
-are enforced by `disallowedTools` in the agent definition and by the
+`scan-secrets` helper in the shared `scripts/` directory enforces the
+scan-before-test ordering with guaranteed cleanup. Other constraints are
+enforced by `disallowedTools` in the agent definition and by the
 procedural steps above.
 
 If a step in this skill appears to conflict with the agent definition, the
