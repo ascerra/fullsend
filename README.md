@@ -59,3 +59,7 @@ If you're applying fullsend to your own organization, consider adding your speci
 | Something you want to try in practice | **Log an experiment** in `experiments/`. |
 
 When in doubt, start with an issue.
+
+## License
+
+This project is licensed under the [Apache License, Version 2.0](LICENSE).

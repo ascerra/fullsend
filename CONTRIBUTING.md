@@ -30,3 +30,7 @@ ADR filenames use a four-digit number (`NNNN-short-description.md`). When multip
 ## Issues
 
 When in doubt about whether something warrants a PR, start with an issue. Issues are low-friction and can graduate into PRs, problem docs, or ADRs later.
+
+## License
+
+All contributions to this project are made under the [Apache License, Version 2.0](LICENSE). By submitting a pull request, you agree that your contributions will be licensed under this license.
