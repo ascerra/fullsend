@@ -1,5 +1,5 @@
 ---
-title: "19. Composable single-responsibility agents with individual sandboxes"
+title: "20. Composable single-responsibility agents with individual sandboxes"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -12,7 +12,7 @@ topics:
   - composability
 ---
 
-# 19. Composable single-responsibility agents with individual sandboxes
+# 20. Composable single-responsibility agents with individual sandboxes
 
 Date: 2026-04-15
 
@@ -125,3 +125,7 @@ isolation model.
   mitigates latency but not total resource consumption.
 - A sandbox runtime supporting per-instance policy is a hard dependency.
   Degradation strategy for environments without such a runtime is deferred.
+- Organizations that prefer fewer agents for cost or simplicity reasons can
+  bundle multiple steps into a single agent and sandbox (Option A). This is a
+  conscious trade-off: the sandbox policy must grant the union of all bundled
+  steps' permissions, widening the blast radius.
