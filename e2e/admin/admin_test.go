@@ -155,9 +155,13 @@ func TestAdminInstallUninstall(t *testing.T) {
 	// =========================================
 	// Phase 2.5: Triage dispatch smoke test
 	// =========================================
-	t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
-	vendorBinaryForE2E(t, env)
-	runTriageDispatchSmokeTest(t, env)
+	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
+		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
+		vendorBinaryForE2E(t, env)
+		runTriageDispatchSmokeTest(t, env)
+	} else {
+		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test (SKIPPED — no inference credentials) ===")
+	}
 
 	// =========================================
 	// Phase 2.75: Unenrollment reconciliation
