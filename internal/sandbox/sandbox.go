@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,6 +252,33 @@ func SSHStream(sshConfigPath, sandboxName, command string, timeout time.Duration
 	}
 
 	return exitCode, nil
+}
+
+// SSHStreamReader runs a command inside a sandbox, returning an io.ReadCloser for
+// stdout so the caller can parse structured output. Stderr is forwarded to the
+// given writer. The caller must read stdout to completion, then call cmd.Wait().
+func SSHStreamReader(sshConfigPath, sandboxName, command string, timeout time.Duration, stderrW io.Writer) (io.ReadCloser, *exec.Cmd, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-F", sshConfigPath,
+		fmt.Sprintf("openshell-%s", sandboxName),
+		command,
+	)
+	cmd.Stderr = stderrW
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, nil, nil, fmt.Errorf("creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, nil, nil, fmt.Errorf("starting ssh command: %w", err)
+	}
+
+	return stdout, cmd, cancel, nil
 }
 
 // RsyncFrom copies a directory from a sandbox to the local machine using rsync

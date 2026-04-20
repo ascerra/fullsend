@@ -312,7 +312,14 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		printer.StepStart("Running agent")
 		printer.Blank()
 
-		exitCode, runErr := sandbox.SSHStream(sshConfigPath, sandboxName, claudeCmd, timeout, os.Stdout, os.Stderr)
+		agentStart := time.Now()
+		heartbeatDone := make(chan struct{})
+		go runHeartbeat(printer, agentStart, timeout, heartbeatDone)
+
+		var metrics RunMetrics
+		exitCode, runErr := runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd, timeout, printer, agentStart, &metrics)
+		close(heartbeatDone)
+
 		if runErr != nil {
 			printer.StepFail("Agent execution failed")
 			return fmt.Errorf("running agent (iteration %d): %w", iteration, runErr)
@@ -544,6 +551,52 @@ func envToList(env map[string]string) []string {
 	return list
 }
 
+func runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd string, timeout time.Duration, printer *ui.Printer, start time.Time, metrics *RunMetrics) (int, error) {
+	stdout, cmd, cancel, err := sandbox.SSHStreamReader(sshConfigPath, sandboxName, claudeCmd, timeout, os.Stderr)
+	if err != nil {
+		return -1, err
+	}
+	defer cancel()
+
+	progressParser(stdout, printer, start, metrics)
+
+	waitErr := cmd.Wait()
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	if waitErr != nil && cmd.ProcessState == nil {
+		return exitCode, fmt.Errorf("ssh failed: %w", waitErr)
+	}
+
+	return exitCode, nil
+}
+
+const heartbeatInterval = 30 * time.Second
+
+func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			elapsed := time.Since(start).Truncate(time.Second)
+			remaining := (timeout - time.Since(start)).Truncate(time.Second)
+			msg := fmt.Sprintf("Agent running (%s elapsed, %s remaining)", elapsed, remaining)
+			if isCI {
+				fmt.Fprintf(os.Stderr, "::notice::%s\n", msg)
+			}
+			printer.Heartbeat(msg)
+		}
+	}
+}
+
 func buildClaudeCommand(agentName, model, repoDir string) string {
 	envFile := sandbox.SandboxWorkspace + "/.env"
 
@@ -556,7 +609,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 	}
 
 	return fmt.Sprintf(
-		"cd %s && source %s && claude --print %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
+		"cd %s && source %s && claude --print --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
 		repoDir, envFile, modelFlag, safe,
 	)
 }

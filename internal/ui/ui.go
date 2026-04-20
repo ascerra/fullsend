@@ -109,6 +109,12 @@ func (p *Printer) ErrorBox(title, detail string) {
 	fmt.Fprintln(p.w, box)
 }
 
+// Heartbeat prints a periodic progress line in muted color.
+func (p *Printer) Heartbeat(text string) {
+	styled := lipgloss.NewStyle().Foreground(ColorMuted).Render("⟳ " + text)
+	fmt.Fprintf(p.w, "  %s\n", styled)
+}
+
 // Blank prints an empty line.
 func (p *Printer) Blank() {
 	fmt.Fprintln(p.w)
