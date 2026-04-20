@@ -998,8 +998,16 @@ func (c *LiveClient) GetWorkflowRunLogs(ctx context.Context, owner, repo string,
 	}
 	var jobsResult struct {
 		Jobs []struct {
-			ID   int    `json:"id"`
-			Name string `json:"name"`
+			ID         int    `json:"id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			Steps      []struct {
+				Name       string `json:"name"`
+				Number     int    `json:"number"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+			} `json:"steps"`
 		} `json:"jobs"`
 	}
 	if err := decodeJSON(resp, &jobsResult); err != nil {
@@ -1008,24 +1016,39 @@ func (c *LiveClient) GetWorkflowRunLogs(ctx context.Context, owner, repo string,
 
 	var buf strings.Builder
 	for _, job := range jobsResult.Jobs {
+		fmt.Fprintf(&buf, "=== %s (job %d) [%s/%s] ===\n", job.Name, job.ID, job.Status, job.Conclusion)
+		// Print step-level summary first.
+		for _, step := range job.Steps {
+			marker := "✓"
+			if step.Conclusion == "failure" {
+				marker = "✗"
+			} else if step.Conclusion == "skipped" {
+				marker = "⊘"
+			} else if step.Status != "completed" {
+				marker = "…"
+			}
+			fmt.Fprintf(&buf, "  %s Step %d: %s [%s/%s]\n", marker, step.Number, step.Name, step.Status, step.Conclusion)
+		}
+		fmt.Fprintln(&buf)
+
 		// Download logs for each job (returns plain text, 302 redirect to download URL).
 		jobResp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, job.ID), nil)
 		if err != nil {
-			fmt.Fprintf(&buf, "=== %s (job %d) ===\n[failed to fetch logs: %v]\n\n", job.Name, job.ID, err)
+			fmt.Fprintf(&buf, "[failed to fetch logs: %v]\n\n", err)
 			continue
 		}
 		if jobResp.StatusCode < 200 || jobResp.StatusCode >= 300 {
 			jobResp.Body.Close()
-			fmt.Fprintf(&buf, "=== %s (job %d) ===\n[logs unavailable: HTTP %d]\n\n", job.Name, job.ID, jobResp.StatusCode)
+			fmt.Fprintf(&buf, "[logs unavailable: HTTP %d]\n\n", jobResp.StatusCode)
 			continue
 		}
 		logData, readErr := io.ReadAll(io.LimitReader(jobResp.Body, 1<<20)) // 1 MB per job
 		jobResp.Body.Close()
 		if readErr != nil {
-			fmt.Fprintf(&buf, "=== %s (job %d) ===\n[failed to read logs: %v]\n\n", job.Name, job.ID, readErr)
+			fmt.Fprintf(&buf, "[failed to read logs: %v]\n\n", readErr)
 			continue
 		}
-		fmt.Fprintf(&buf, "=== %s (job %d) ===\n%s\n", job.Name, job.ID, string(logData))
+		fmt.Fprintf(&buf, "%s\n", string(logData))
 	}
 	return buf.String(), nil
 }

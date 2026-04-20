@@ -653,8 +653,7 @@ Files over 64KB save fine if they contain only ASCII characters.`
 		if logErr != nil {
 			t.Logf("Could not fetch run logs: %v", logErr)
 		} else {
-			t.Logf("Workflow run logs (first 4000 chars):\n%.4000s", logs)
-			t.Logf("Workflow run logs (last 2000 chars):\n%s", truncateEnd(logs, 2000))
+			t.Logf("Workflow run logs:\n%s", logs)
 		}
 		t.Fatalf("Triage workflow run %d concluded with %q, expected success", finalRun.ID, finalRun.Conclusion)
 	}
@@ -810,14 +809,6 @@ func hasPrivateRepos(repos []forge.Repository) bool {
 		}
 	}
 	return false
-}
-
-// truncateEnd returns the last n characters of s, or all of s if shorter.
-func truncateEnd(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "...\n" + s[len(s)-n:]
 }
 
 // extractProjectID attempts to extract project_id from a GCP service account
