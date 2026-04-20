@@ -54,6 +54,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Install Python and LLM Guard with ONNX runtime for ML-based prompt
 # injection scanning. Pre-download the DeBERTa-v3 model so first scan
 # has no cold-start delay.
+#
+# HF_HOME must point outside /root/ so the sandbox user (uid 998) can
+# read the cached model at runtime — /root/ is mode 700.
+ENV HF_HOME="/opt/huggingface"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
