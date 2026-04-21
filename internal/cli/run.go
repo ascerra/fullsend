@@ -538,8 +538,8 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir string, h *harness.Har
 	// Agent and skill definitions go in CLAUDE_CONFIG_DIR so `claude --agent`
 	// finds them regardless of the repo's own .claude/ directory. When
 	// CLAUDE_CONFIG_DIR is set, Claude uses it instead of ~/.claude/.
-	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/hooks %s/bin %s/.env.d %s/.security %s",
-		sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig)
+	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/hooks %s/bin %s/.env.d %s/.security %s %s/.claude/hooks",
+		sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace)
 	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkdirCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating workspace dirs: %w", err)
 	}
