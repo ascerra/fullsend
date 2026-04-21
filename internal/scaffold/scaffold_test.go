@@ -146,7 +146,7 @@ func TestTriageAgentPromptContent(t *testing.T) {
 	content, err := FullsendRepoFile("agents/triage.md")
 	require.NoError(t, err)
 	s := string(content)
-	assert.Contains(t, s, "triage-result.json")
+	assert.Contains(t, s, "agent-result.json")
 	assert.Contains(t, s, "clarity_scores")
 	assert.Contains(t, s, "Anti-premature-resolution")
 }
