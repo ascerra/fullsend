@@ -281,8 +281,15 @@ func TestValidate_ModelInvalid(t *testing.T) {
 }
 
 func TestValidate_ModelValid(t *testing.T) {
-	h := &Harness{Agent: "agents/test.md", Model: "claude-sonnet-4-6"}
-	require.NoError(t, h.Validate())
+	for _, model := range []string{
+		"claude-sonnet-4-6",
+		"claude-sonnet-4-6@default",
+		"claude-sonnet-4-6@20250514",
+		"claude-opus-4-1@20250805",
+	} {
+		h := &Harness{Agent: "agents/test.md", Model: model}
+		require.NoError(t, h.Validate(), "model %q should be valid", model)
+	}
 }
 
 func TestValidate_NegativeTimeout(t *testing.T) {
