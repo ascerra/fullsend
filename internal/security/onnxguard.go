@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/knights-analytics/hugot/pipelines"
 
@@ -69,6 +70,10 @@ func validateLabels(modelPath string) error {
 // given text. In sentence mode, splits text into sentences and takes
 // the max injection score.
 func (s *ONNXGuardScanner) Scan(text string) ScanResult {
+	if strings.TrimSpace(text) == "" {
+		return ScanResult{Safe: true}
+	}
+
 	ctx := context.Background()
 
 	var maxScore float64
@@ -131,21 +136,29 @@ func (s *ONNXGuardScanner) maxSentenceScore(ctx context.Context, sents []string)
 		return 0, nil
 	}
 
-	if len(sents) > maxSentenceBatch {
-		sents = sents[:maxSentenceBatch]
-	}
-
-	result, err := s.pipeline.RunPipeline(ctx, sents)
-	if err != nil {
-		return 0, err
-	}
-
 	var max float64
-	for _, outputs := range result.ClassificationOutputs {
-		for _, o := range outputs {
-			if o.Label == "INJECTION" && float64(o.Score) > max {
-				max = float64(o.Score)
+	for i := 0; i < len(sents); i += maxSentenceBatch {
+		end := i + maxSentenceBatch
+		if end > len(sents) {
+			end = len(sents)
+		}
+		chunk := sents[i:end]
+
+		result, err := s.pipeline.RunPipeline(ctx, chunk)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, outputs := range result.ClassificationOutputs {
+			for _, o := range outputs {
+				if o.Label == "INJECTION" && float64(o.Score) > max {
+					max = float64(o.Score)
+				}
 			}
+		}
+
+		if max >= s.threshold {
+			return max, nil
 		}
 	}
 	return max, nil
