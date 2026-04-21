@@ -27,7 +27,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-ref: ${{ steps.push.outputs.digest && format('{0}@{1}', env.BASE_IMAGE_NAME, steps.push.outputs.digest) || steps.meta.outputs.tags }}
+      image-ref: ${{ steps.ref.outputs.value }}
     env:
       BASE_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/fullsend-sandbox
     steps:
@@ -65,6 +65,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=sandbox
           cache-to: type=gha,mode=max,scope=sandbox
+
+      # Compute a single image reference for the build-code job.
+      # On push: use the immutable digest from the pushed image.
+      # On PR: use the latest published image (the PR build validates
+      # the Containerfile compiles but doesn't push, so build-code
+      # needs an already-published base to FROM).
+      - name: Compute base image ref
+        id: ref
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE_NAME: ${{ env.BASE_IMAGE_NAME }}
+        run: |
+          if [ -n "$DIGEST" ]; then
+            echo "value=${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+          fi
 
   build-code:
     needs: build-base
