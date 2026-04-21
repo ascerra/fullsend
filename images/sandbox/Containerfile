@@ -104,12 +104,14 @@ RUN curl -fsSL \
 # even if pip is network-restricted inside the sandbox.
 ARG PRECOMMIT_VERSION=4.5.1
 ARG GITLINT_VERSION=0.19.1
+ARG JSONSCHEMA_VERSION=4.23.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --break-system-packages \
       "pre-commit==${PRECOMMIT_VERSION}" \
-      "gitlint-core==${GITLINT_VERSION}"
+      "gitlint-core==${GITLINT_VERSION}" \
+      "jsonschema==${JSONSCHEMA_VERSION}"
 
 # ---------------------------------------------------------------------------
 # tirith — terminal security scanner for PreToolUse hooks.
