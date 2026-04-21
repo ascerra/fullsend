@@ -12,6 +12,7 @@ import (
 
 var (
 	validAgentName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	validModelName = regexp.MustCompile(`^[a-zA-Z0-9_.@-]+$`)
 	envVarRef      = regexp.MustCompile(`\$\{([^}]+)\}`)
 )
 
@@ -220,8 +221,8 @@ func (h *Harness) Validate() error {
 	if !validAgentName.MatchString(agentBase) {
 		return fmt.Errorf("agent name %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -)", agentBase)
 	}
-	if h.Model != "" && !validAgentName.MatchString(h.Model) {
-		return fmt.Errorf("model %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -)", h.Model)
+	if h.Model != "" && !validModelName.MatchString(h.Model) {
+		return fmt.Errorf("model %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -, ., @)", h.Model)
 	}
 	if h.TimeoutMinutes < 0 {
 		return fmt.Errorf("timeout_minutes must be non-negative, got %d", h.TimeoutMinutes)
