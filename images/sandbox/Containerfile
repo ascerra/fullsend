@@ -47,17 +47,19 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # The model is loaded at runtime by Go/onnxruntime — no Python dependency.
 ARG PROTECTAI_MODEL_REV=e6535ca4ce3ba852083e75ec585d7c8aeb4be4c5
 ARG PROTECTAI_MODEL_DIR=/opt/fullsend/models/protectai-deberta-v3/onnx
+ARG PROTECTAI_MODEL_ONNX_SHA256=f0ea7f239f765aedbde7c9e163a7cb38a79c5b8853d3f76db5152172047b228c
 RUN mkdir -p "${PROTECTAI_MODEL_DIR}" \
     && for f in model.onnx config.json tokenizer.json special_tokens_map.json tokenizer_config.json; do \
-         curl -fsSL \
+         curl -fsSL --retry 3 --retry-delay 5 \
            "https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2/resolve/${PROTECTAI_MODEL_REV}/onnx/${f}" \
            -o "${PROTECTAI_MODEL_DIR}/${f}"; \
        done \
+    && echo "${PROTECTAI_MODEL_ONNX_SHA256}  ${PROTECTAI_MODEL_DIR}/model.onnx" | sha256sum -c - \
     && /usr/bin/python3 -c "\
 import json; cfg = json.load(open('${PROTECTAI_MODEL_DIR}/config.json')); \
 assert cfg.get('id2label', {}).get('1') == 'INJECTION', \
   f\"label ordering mismatch: id2label={cfg.get('id2label')}\"" \
-    && echo "ProtectAI DeBERTa-v3 model downloaded at rev ${PROTECTAI_MODEL_REV} (label ordering verified)"
+    && echo "ProtectAI DeBERTa-v3 model downloaded at rev ${PROTECTAI_MODEL_REV} (model.onnx SHA256-verified, label ordering verified)"
 
 # ---------------------------------------------------------------------------
 # ONNX Runtime shared library — loaded by hugot at runtime.

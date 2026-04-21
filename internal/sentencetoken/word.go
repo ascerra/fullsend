@@ -34,7 +34,7 @@ func tokenizeWords(text string, onlyPeriodContext bool) []*token {
 		}
 
 		var cursor int
-		if i == textLen-1 {
+		if i+utf8.RuneLen(char) == textLen && !unicode.IsSpace(char) {
 			cursor = textLen
 		} else {
 			cursor = i

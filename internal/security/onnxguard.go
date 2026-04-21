@@ -81,6 +81,7 @@ func (s *ONNXGuardScanner) Scan(text string) ScanResult {
 
 	if s.matchType == "sentence" {
 		sents := sentencetoken.SplitSentences(text)
+		sents = splitLongSentences(sents)
 		maxScore, err = s.maxSentenceScore(ctx, sents)
 	} else {
 		maxScore, err = s.scoreText(ctx, text)
@@ -127,6 +128,31 @@ func (s *ONNXGuardScanner) scoreText(ctx context.Context, text string) (float64,
 		}
 	}
 	return 0, nil
+}
+
+const maxSentenceChars = 1500
+
+func splitLongSentences(sents []string) []string {
+	result := make([]string, 0, len(sents))
+	for _, s := range sents {
+		if len(s) <= maxSentenceChars {
+			result = append(result, s)
+			continue
+		}
+		stride := maxSentenceChars / 2
+		for start := 0; start < len(s); start += stride {
+			end := start + maxSentenceChars
+			if end >= len(s) {
+				result = append(result, s[start:])
+				break
+			}
+			if cut := strings.LastIndexByte(s[start:end], ' '); cut > 0 {
+				end = start + cut
+			}
+			result = append(result, s[start:end])
+		}
+	}
+	return result
 }
 
 const maxSentenceBatch = 200

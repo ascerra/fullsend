@@ -18,6 +18,11 @@ var testPipeline *pipelines.TextClassificationPipeline
 var testModelPath string
 
 func TestMain(m *testing.M) {
+	initTestPipeline()
+	os.Exit(m.Run())
+}
+
+func initTestPipeline() {
 	testModelPath = os.Getenv("MODEL_PATH")
 	if testModelPath == "" {
 		testModelPath = "/tmp/protectai-model"
@@ -28,7 +33,7 @@ func TestMain(m *testing.M) {
 	}
 
 	if _, err := os.Stat(testModelPath); err != nil {
-		os.Exit(0)
+		return
 	}
 
 	ctx := context.Background()
@@ -37,9 +42,8 @@ func TestMain(m *testing.M) {
 		options.WithIntraOpNumThreads(4),
 	)
 	if err != nil {
-		os.Exit(0)
+		return
 	}
-	defer session.Destroy()
 
 	config := hugot.TextClassificationConfig{
 		ModelPath: testModelPath,
@@ -51,11 +55,10 @@ func TestMain(m *testing.M) {
 	}
 	p, err := hugot.NewPipeline(session, config)
 	if err != nil {
-		os.Exit(0)
+		session.Destroy()
+		return
 	}
 	testPipeline = p
-
-	os.Exit(m.Run())
 }
 
 func TestONNXGuardScanner_DetectsInjection_Sentence(t *testing.T) {
