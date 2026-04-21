@@ -144,6 +144,27 @@ func TestSetup_ExistingApp_NoSecret(t *testing.T) {
 	assert.Contains(t, err.Error(), "private key")
 }
 
+func TestSetup_ExistingApp_ClientIDLookupFails(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 10, AppSlug: "myorg-fullsend"},
+		},
+		// No AppClientIDs entry — GetAppClientID will return ErrNotFound.
+	}
+	prompter := &fakePrompter{}
+	browser := newFakeBrowser()
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithSecretExists(func(_ string) (bool, error) {
+			return true, nil
+		})
+
+	_, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client ID")
+}
+
 func TestSetup_KnownSlug_Match(t *testing.T) {
 	client := &forge.FakeClient{
 		Installations: []forge.Installation{

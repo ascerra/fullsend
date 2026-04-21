@@ -1093,6 +1093,9 @@ func (c *LiveClient) GetAppClientID(ctx context.Context, slug string) (string, e
 	if err := decodeJSON(resp, &app); err != nil {
 		return "", fmt.Errorf("decode app %s: %w", slug, err)
 	}
+	if app.ClientID == "" {
+		return "", fmt.Errorf("app %s has no client_id", slug)
+	}
 	return app.ClientID, nil
 }
 
