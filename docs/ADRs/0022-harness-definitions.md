@@ -1,16 +1,18 @@
 ---
-title: "0020. Harness definitions and shared directory layout"
+title: "22. Harness definitions and shared directory layout"
 status: Proposed
 relates_to:
   - agent-architecture
   - agent-infrastructure
+  - security-threat-model
 topics:
   - harness
   - configuration
   - sandbox
+  - security
 ---
 
-# 0020. Harness definitions and shared directory layout
+# 22. Harness definitions and shared directory layout
 
 Date: 2026-04-07
 
@@ -57,7 +59,14 @@ parts:
     variables via `${VAR}` expansion. Distinct from `required_env` (which is a
     contract) — `runner_env` carries configuration for the runner's own scripts.
 12. **Timeout** — a hard kill enforced by the runner.
-13. **Validation loop** *(deferred — see Consequences)* — an optional
+13. **Security scanning** *(optional)* — per-harness configuration of layered
+    prompt injection defenses. Host-side scanners run before sandbox creation
+    (context injection detection, SSRF validation, unicode normalization, secret
+    redaction, ML-based LLM Guard). Sandbox-side hooks run during agent
+    execution (Tirith terminal security, SSRF pre-tool checks, secret redaction
+    post-tool). Secure by default: omitting the block enables all scanners with
+    fail-closed semantics.
+14. **Validation loop** *(deferred — see Consequences)* — an optional
     deterministic script that checks agent output and re-runs the agent with
     feedback on failure. The full design (whether validation can invoke other
     agents, sandbox boundary, observability implications) is tracked as a
@@ -100,7 +109,11 @@ definition and executes a deterministic sequence:
 ```
 
 The runner is deterministic code, not an LLM. The agent is the LLM session.
-Each harness invocation provisions one sandbox for one agent.
+Each harness invocation provisions one sandbox for one agent — consistent with
+the composable single-responsibility agent model
+([ADR 0020](0020-composable-single-responsibility-agents-with-individual-sandboxes.md)),
+where each step within a stage gets its own agent, its own harness, and its own
+sandbox with policies designed for that step's responsibility.
 
 Multi-agent sequencing — for example, running a code agent then a review agent
 with a gate — belongs in the CI pipeline definition (GitHub Actions, Tekton,
@@ -110,7 +123,9 @@ Note: the "one executable" inside the sandbox could be a shell script that
 invokes Claude Code multiple times with different system prompts (e.g. a
 code→review→code loop). From the sandbox's perspective this is one process.
 From an observability perspective it produces multiple `.jsonl` transcripts,
-which complicates features like `/ci:continue-claude`. This pattern is
+which complicates features like `/ci:continue-claude` and the JSONL trace
+exposure model
+([ADR 0021](0021-jsonl-reasoning-trace-exposure.md)). This pattern is
 supported but has trade-offs that should be weighed against CI-level
 orchestration.
 
@@ -294,8 +309,14 @@ applies at the directory and file level: fullsend ships defaults, the org
 description: <text>
 
 # The agent definition file (Claude sub-agent standard .md with frontmatter).
-# Model is specified in the agent definition frontmatter, not here.
 agent: agents/<agent>.md
+
+# Optional model override. When set, this takes precedence over the model
+# declared in the agent definition's frontmatter. This allows the same agent
+# definition to be reused across harnesses targeting different cost/latency
+# profiles (e.g. opus for code, haiku for triage) without duplicating the
+# agent .md file. When omitted, the model from the agent definition is used.
+model: <model-name>
 
 # Pre-built container image for the sandbox. When provided, the sandbox is
 # created via `openshell create --from <image>`, and tool binaries baked into
@@ -378,6 +399,33 @@ runner_env:
 
 # Hard timeout enforced by the runner. The sandbox is killed after this.
 timeout_minutes: 30
+
+# Security scanning configuration. Controls layered prompt injection defenses
+# that run at two points: host-side scanners before sandbox creation (context
+# injection detection, SSRF validation, unicode normalization, secret
+# redaction, ML-based LLM Guard) and sandbox-side hooks during agent execution
+# (Tirith terminal security, SSRF pre-tool checks, secret redaction post-tool).
+# Secure by default: omitting this block enables all scanners with
+# fail_mode: closed (scanner failure blocks the run). Set fail_mode: open to
+# allow the run to proceed when a scanner fails (useful during development,
+# not recommended for production). Individual scanners can be toggled off.
+security:
+  enabled: true                      # nil/omitted = true (secure by default)
+  fail_mode: closed                  # "closed" (default) or "open"
+  host_scanners:
+    unicode_normalizer: true
+    context_injection: true
+    ssrf_validator: true
+    secret_redactor: true
+    llm_guard:
+      enabled: true
+      threshold: 0.92
+      match_type: sentence           # "sentence" or "full"
+  sandbox_hooks:
+    tirith:
+      enabled: true
+    ssrf_pretool: true
+    secret_redact_posttool: true
 ```
 
 ### Example: triage harness (with container image)
@@ -388,6 +436,7 @@ A single agent with a pre-built image, no code changes, no push, no PR:
 # harness/triage.yaml
 description: Triage incoming issues — deduplicate, assess completeness, assign priority.
 agent: agents/triage.md
+model: opus
 image: quay.io/fullsend/triage-agent:latest
 policy: policies/readonly-with-web.yaml
 
@@ -443,6 +492,7 @@ If validation fails, the agent re-runs with the failure output as context:
 # harness/code.yaml
 description: Implement code changes from an issue, with lint/test validation.
 agent: agents/code.md
+model: opus
 image: quay.io/fullsend/code-agent:latest
 policy: policies/code-write.yaml
 
@@ -590,6 +640,14 @@ agents and where those agents run — is deferred to a separate ADR.
 
 - **One harness, one agent, one sandbox.** The runner has a single
   responsibility: read a harness file and execute one agent in one sandbox.
+  This is the execution-level realization of the composable
+  single-responsibility agent model
+  ([ADR 0020](0020-composable-single-responsibility-agents-with-individual-sandboxes.md))
+  and the credential isolation principle
+  ([ADR 0017](0017-credential-isolation-for-sandboxed-agents.md)). JSONL
+  reasoning traces extracted from the sandbox (step 11) follow the
+  owner-scoped storage and credential scanning policy established by
+  [ADR 0021](0021-jsonl-reasoning-trace-exposure.md).
 - **Shared resources promote reuse.** Policies, skills, tools, and API servers
   live in their own directories and are referenced by multiple harnesses.
   Updating a shared policy updates every agent that uses it.
@@ -626,9 +684,11 @@ agents and where those agents run — is deferred to a separate ADR.
   (policies/, skills/, etc.) follows the
   [ADR 0003](0003-org-config-repo-convention.md) layering
   (fullsend defaults → org `.fullsend` → per-repo) independently.
-- **Model stays in the agent definition.** The harness YAML does not specify or
-  override the model — that belongs in the agent `.md` frontmatter per the
-  Claude sub-agent standard.
+- **Model default lives in the agent definition; harness can override.** The
+  agent `.md` frontmatter declares the default model per the Claude sub-agent
+  standard. The harness `model` field is an optional override — when set, it
+  takes precedence. This lets a single agent definition be reused across
+  harnesses targeting different cost/latency profiles without duplication.
 - **Multi-agent orchestration lives at the CI layer, not in the runner.** The
   runner's job is one harness, one agent, one sandbox. Sequencing multiple
   agents (e.g. code then review with a gate) is expressed in CI workflow
@@ -646,6 +706,17 @@ agents and where those agents run — is deferred to a separate ADR.
   dependencies baked in. When no image is provided, `tools_binaries` declares
   individual binaries the runner fetches and copies into the sandbox — this is
   the fallback path, not the default.
+- **Security scanning is per-harness and secure by default.** Each harness can
+  configure layered prompt injection defenses — host-side scanners (unicode
+  normalization, context injection detection, SSRF validation, secret
+  redaction, ML-based LLM Guard) and sandbox-side hooks (Tirith terminal
+  security, SSRF pre-tool, secret redaction post-tool). Omitting the
+  `security` block enables all scanners with fail-closed semantics. Individual
+  scanners can be toggled off per-harness, and `fail_mode: open` allows runs
+  to proceed when scanners fail (useful during development). The inheritance
+  model applies: org-level security settings provide the baseline, and
+  per-repo overrides are subject to the protected-fields policy
+  ([#236](https://github.com/fullsend-ai/fullsend/issues/236)).
 - A JSON Schema for the harness YAML format is a natural follow-on.
 
 ### Deferred to separate ADRs or issues
