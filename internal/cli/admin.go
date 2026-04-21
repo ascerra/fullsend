@@ -778,19 +778,16 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	}
 
 	// Build a pre-filled URL for fine-grained PAT creation.
-	// GitHub supports query parameters to pre-fill name, description,
-	// resource owner, expiration, and permissions. The user only needs to:
-	//   1. Select "Only select repositories" and pick .fullsend
-	//   2. Click "Generate token"
-	//   3. Paste the token
+	// GitHub honors name, description, and target_name query params but
+	// does NOT reliably pre-fill permissions — the user must add Actions
+	// read+write manually via the "+ Add permissions" button.
 	escapedOrg := url.QueryEscape(org)
 	patURL := fmt.Sprintf(
 		"https://github.com/settings/personal-access-tokens/new"+
 			"?name=fullsend-dispatch-%s"+
 			"&description=Dispatch+token+for+fullsend+agent+pipeline+in+%s."+
 			"+Scoped+to+.fullsend+repo+with+Actions+write+only."+
-			"&target_name=%s"+
-			"&actions=write",
+			"&target_name=%s",
 		escapedOrg, escapedOrg, escapedOrg,
 	)
 
@@ -806,7 +803,12 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	}
 
 	printer.Blank()
-	printer.StepWarn("IMPORTANT: GitHub's resource owner selector has a known quirk.")
+	printer.StepWarn("IMPORTANT: The installer's URL tried to pre-fill actions/write")
+	printer.StepWarn("in the query parameters, but GitHub's fine-grained PAT page doesn't")
+	printer.StepWarn("always honor those pre-fill params. So you just have to click that")
+	printer.StepWarn("'+ Add permissions' button and add Actions manually.")
+	printer.Blank()
+	printer.StepWarn("GitHub's resource owner selector has a known quirk.")
 	printer.StepWarn("If the owner is pre-filled, you may need to de-select and")
 	printer.StepWarn("re-select the owner for the repository picker to appear.")
 	printer.Blank()
@@ -816,9 +818,14 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	printer.StepInfo("      away and back to " + org + " to force it to load)")
 	printer.StepInfo("  2. Under 'Repository access', select 'Only select repositories'")
 	printer.StepInfo("  3. Pick ONLY the .fullsend repository (not other repos)")
-	printer.StepInfo("  4. Verify 'Actions: Read and write' is checked under permissions")
-	printer.StepInfo("  5. Click 'Generate token'")
-	printer.StepInfo("  6. Copy and paste the token below")
+	printer.StepInfo("  4. Click the '+ Add permissions' button (top right of Permissions section)")
+	printer.StepInfo("  5. Look for 'Actions' in the dropdown/list that appears")
+	printer.StepInfo("  6. Set it to 'Read and write'")
+	printer.StepInfo("  7. Click 'Generate token' (the green button at the bottom left)")
+	printer.StepInfo("  8. GitHub will show the token ONCE on the next page — copy it immediately")
+	printer.StepInfo("     (If you navigate away before copying, you'll need to delete the token")
+	printer.StepInfo("      and create a new one — GitHub never shows it again)")
+	printer.StepInfo("  9. Paste the token below")
 	printer.Blank()
 	printer.StepInfo("Paste the token here:")
 
