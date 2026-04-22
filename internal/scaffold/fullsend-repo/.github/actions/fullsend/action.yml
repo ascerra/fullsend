@@ -91,6 +91,10 @@ runs:
         tar -xzf "/tmp/${ASSET_NAME}" -C "${RUNNER_TEMP}/fullsend"
         echo "${RUNNER_TEMP}/fullsend" >> "${GITHUB_PATH}"
 
+    - name: Print fullsend version
+      shell: bash
+      run: fullsend --version
+
     - name: Install OpenShell
       shell: bash
       run: |
