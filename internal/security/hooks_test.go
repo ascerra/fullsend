@@ -26,7 +26,13 @@ func TestGenerateClaudeSettings_AllDefaults(t *testing.T) {
 	assert.Len(t, preTools, 2) // tirith + ssrf
 
 	postTools := hooks["PostToolUse"].([]any)
-	assert.Len(t, postTools, 2) // secret_redact + unicode
+	assert.Len(t, postTools, 1) // single matcher with chained hooks
+
+	// Verify both hooks are chained within the single matcher.
+	matcher := postTools[0].(map[string]any)
+	assert.Equal(t, "Bash|WebFetch|Read", matcher["matcher"])
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 2) // secret_redact → unicode
 }
 
 func TestGenerateClaudeSettings_TirithDisabled(t *testing.T) {
@@ -144,5 +150,10 @@ func TestGenerateClaudeSettings_UnicodeDisabled(t *testing.T) {
 
 	hooks := settings["hooks"].(map[string]any)
 	postTools := hooks["PostToolUse"].([]any)
-	assert.Len(t, postTools, 1) // only secret_redact
+	assert.Len(t, postTools, 1) // single matcher
+
+	// With unicode disabled, only secret_redact hook in the chain.
+	matcher := postTools[0].(map[string]any)
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 1) // only secret_redact
 }

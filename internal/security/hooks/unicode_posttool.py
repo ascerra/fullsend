@@ -6,12 +6,13 @@ Unicode characters that can encode hidden instructions: steganographic
 payloads (tag characters), invisible text (zero-width), Trojan Source
 attacks (bidi overrides), and ANSI escape injection.
 
-Critical findings (tag characters with decoded hidden text) block the tool
-result. Non-critical findings strip the invisible characters and pass
-through the sanitized text.
+All findings are sanitized (invisible characters stripped) and the cleaned
+text is returned. PostToolUse hooks cannot block — they sanitize only.
+Critical findings (tag characters) are logged to findings.jsonl for the
+post-script to act on.
 
 Protocol: reads JSON from stdin, writes JSON to stdout with modified
-tool_result if findings detected.
+tool_result if findings detected. Always exits 0.
 """
 
 from __future__ import annotations
@@ -24,8 +25,10 @@ import unicodedata
 from datetime import UTC, datetime
 
 FINDINGS_PATH = "/tmp/workspace/.security/findings.jsonl"
+MAX_DECODED_LOG = 200
 
 # --- Unicode categories to detect ---
+# Aligned with Go UnicodeNormalizer (internal/security/unicode.go).
 
 _CHECKS: list[tuple[str, str, re.Pattern]] = [
     (
@@ -36,22 +39,12 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
     (
         "zero_width",
         "high",
-        re.compile("[\u200b-\u200d\ufeff\u00ad]+"),
+        re.compile("[\u200b-\u200d\ufeff\u00ad\u2060-\u2064]+"),
     ),
     (
         "bidi_override",
         "high",
-        re.compile("[\u202a-\u202e]+"),
-    ),
-    (
-        "bidi_isolate",
-        "high",
-        re.compile("[\u2066-\u2069]+"),
-    ),
-    (
-        "invisible_operator",
-        "medium",
-        re.compile("[\u2060-\u2064]+"),
+        re.compile("[\u202a-\u202e\u2066-\u2069]+"),
     ),
     (
         "variation_selector",
@@ -61,7 +54,7 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
     (
         "ansi_escape",
         "medium",
-        re.compile(r"\x1b\[[0-9;]*[a-zA-Z]"),
+        re.compile(r"\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"),
     ),
     (
         "null_byte",
@@ -71,7 +64,7 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
 ]
 
 
-def log_finding(name: str, severity: str, detail: str, action: str):
+def log_finding(name: str, severity: str, detail: str, action: str) -> None:
     trace_id = os.environ.get("FULLSEND_TRACE_ID", "")
     finding = {
         "trace_id": trace_id,
@@ -92,7 +85,10 @@ def log_finding(name: str, severity: str, detail: str, action: str):
 
 def decode_tag_chars(text: str) -> str:
     """Decode tag characters (U+E0000-U+E007F) to reveal hidden ASCII."""
-    return "".join(chr(ord(c) - 0xE0000) for c in text if 0xE0000 <= ord(c) <= 0xE007F)
+    decoded = "".join(chr(ord(c) - 0xE0000) for c in text if 0xE0000 <= ord(c) <= 0xE007F)
+    if len(decoded) > MAX_DECODED_LOG:
+        return decoded[:MAX_DECODED_LOG] + "..."
+    return decoded
 
 
 def scan_text(text: str) -> tuple[str, list[dict]]:
@@ -110,6 +106,8 @@ def scan_text(text: str) -> tuple[str, list[dict]]:
         if name == "tag_char":
             decoded = decode_tag_chars(result)
             if decoded.strip():
+                # Decoded text logged to findings.jsonl only — never to stdout
+                # where it would enter the LLM context as a prompt injection vector.
                 detail += f" (decoded hidden text: {decoded.strip()})"
 
         findings.append(
@@ -125,8 +123,11 @@ def scan_text(text: str) -> tuple[str, list[dict]]:
     # NFKC normalization (fullwidth -> ASCII, compatibility decomposition).
     nfkc = unicodedata.normalize("NFKC", result)
     if nfkc != result:
-        diff_count = sum(1 for a, b in zip(result, nfkc) if a != b)
-        diff_count += abs(len(result) - len(nfkc))
+        orig_chars = list(result)
+        nfkc_chars = list(nfkc)
+        min_len = min(len(orig_chars), len(nfkc_chars))
+        diff_count = sum(1 for i in range(min_len) if orig_chars[i] != nfkc_chars[i])
+        diff_count += abs(len(orig_chars) - len(nfkc_chars))
         diff_count = max(diff_count, 1)
         findings.append(
             {
@@ -143,15 +144,28 @@ def scan_text(text: str) -> tuple[str, list[dict]]:
 MAX_INPUT_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-def main():
+def main() -> None:
     try:
         raw = sys.stdin.read(MAX_INPUT_BYTES + 1)
         if len(raw) > MAX_INPUT_BYTES:
+            log_finding(
+                "input_truncated",
+                "medium",
+                f"Input truncated from {len(raw)} to {MAX_INPUT_BYTES} bytes",
+                "warn",
+            )
             raw = raw[:MAX_INPUT_BYTES]
         if not raw.strip():
             sys.exit(0)
         hook_input = json.loads(raw)
-    except (json.JSONDecodeError, Exception):
+    except json.JSONDecodeError:
+        log_finding("parse_error", "medium", "Hook input is not valid JSON", "warn")
+        sys.exit(0)
+    except Exception as e:
+        log_finding("parse_error", "high", f"Hook input parsing failed: {type(e).__name__}", "warn")
+        sys.exit(0)
+
+    if not isinstance(hook_input, dict):
         sys.exit(0)
 
     tool_result = hook_input.get("tool_result", "")
@@ -161,28 +175,26 @@ def main():
     try:
         sanitized, findings = scan_text(tool_result)
     except Exception as e:
-        log_finding("scan_error", "high", f"Unicode scan failed (passing original): {e}", "warn")
+        log_finding(
+            "scan_error",
+            "high",
+            f"Unicode scan failed (passing original): {type(e).__name__}",
+            "warn",
+        )
         sys.exit(0)
 
     if not findings:
         sys.exit(0)
 
-    has_critical = any(f["severity"] == "critical" for f in findings)
-
     for f in findings:
-        action = "block" if f["severity"] == "critical" else "sanitize"
+        action = "sanitize"
+        if f["severity"] == "critical":
+            action = "critical_sanitize"
         log_finding(f["name"], f["severity"], f["detail"], action)
 
-    if has_critical:
-        json.dump(
-            {
-                "decision": "block",
-                "reason": f"Critical unicode findings: {'; '.join(f['detail'] for f in findings if f['severity'] == 'critical')}",
-            },
-            sys.stdout,
-        )
-        sys.exit(1)
-
+    # PostToolUse hooks always exit 0 — they sanitize, never block.
+    # Critical findings (tag chars) are stripped from tool_result and logged
+    # to findings.jsonl for the post-script to escalate.
     json.dump(
         {
             "tool_result": sanitized,

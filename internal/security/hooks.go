@@ -72,23 +72,25 @@ func GenerateClaudeSettings(h *harness.Harness) ([]byte, error) {
 		})
 	}
 
-	// Secret redaction PostToolUse hook.
+	// PostToolUse hooks for Bash|WebFetch|Read: secret redaction then unicode
+	// scanning. Combined into a single matcher so Claude Code chains them
+	// sequentially (separate matchers run in parallel on the original result,
+	// which would cause modifications to conflict).
+	var postToolHooks []hookEntry
 	if secretRedactPostToolEnabled(sec) {
-		postToolMatchers = append(postToolMatchers, hookMatcher{
-			Matcher: "Bash|WebFetch|Read",
-			Hooks: []hookEntry{
-				{Type: "command", Command: "python3 " + SandboxHooksDir + "/secret_redact_posttool.py"},
-			},
+		postToolHooks = append(postToolHooks, hookEntry{
+			Type: "command", Command: "python3 " + SandboxHooksDir + "/secret_redact_posttool.py",
 		})
 	}
-
-	// Unicode scanning PostToolUse hook.
 	if unicodePostToolEnabled(sec) {
+		postToolHooks = append(postToolHooks, hookEntry{
+			Type: "command", Command: "python3 " + SandboxHooksDir + "/unicode_posttool.py",
+		})
+	}
+	if len(postToolHooks) > 0 {
 		postToolMatchers = append(postToolMatchers, hookMatcher{
 			Matcher: "Bash|WebFetch|Read",
-			Hooks: []hookEntry{
-				{Type: "command", Command: "python3 " + SandboxHooksDir + "/unicode_posttool.py"},
-			},
+			Hooks:   postToolHooks,
 		})
 	}
 
