@@ -95,8 +95,11 @@ def post_summary(repo, pr_number, body, dry_run=False):
     """Post a summary comment on the PR."""
     if len(body) > MAX_COMMENT_LENGTH:
         truncation_notice = "\n\n*[truncated — output exceeded 32KB]*"
+        original_len = len(body)
         body = body[: MAX_COMMENT_LENGTH - len(truncation_notice)] + truncation_notice
-        print(f"::warning::Comment body truncated from {len(body)} to {MAX_COMMENT_LENGTH} chars")
+        print(
+            f"::warning::Comment body truncated from {original_len} to {MAX_COMMENT_LENGTH} chars"
+        )
     if dry_run:
         print(f"  [dry-run] Would post PR summary ({len(body)} chars)")
         return True

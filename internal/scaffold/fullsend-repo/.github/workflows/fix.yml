@@ -72,9 +72,28 @@ jobs:
             exit 1
           fi
 
+      - name: Extract target repo name
+        id: repo-parts
+        env:
+          SOURCE_REPO: ${{ inputs.source_repo }}
+        run: echo "name=${SOURCE_REPO##*/}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate sandbox token (read-only)
+        id: sandbox-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FULLSEND_CODER_CLIENT_ID }}
+          private-key: ${{ secrets.FULLSEND_CODER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo-parts.outputs.name }}
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+          permission-metadata: read
+
       - name: Block fork PRs
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
           EVENT_PAYLOAD: ${{ inputs.event_payload }}
           SOURCE_REPO: ${{ inputs.source_repo }}
           PR_NUM_INPUT: ${{ inputs.pr_number }}
@@ -104,7 +123,7 @@ jobs:
       - name: Extract PR number and context
         id: context
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
           EVENT_PAYLOAD: ${{ inputs.event_payload }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
           INPUT_INSTRUCTION: ${{ inputs.instruction }}
@@ -177,25 +196,6 @@ jobs:
           ITERATION=$(( FIX_COMMITS + 1 ))
           echo "Fix iteration: ${ITERATION} (${FIX_COMMITS} previous fix commits)" >&2
           echo "iteration=${ITERATION}" >> "${GITHUB_OUTPUT}"
-
-      - name: Extract target repo name
-        id: repo-parts
-        env:
-          SOURCE_REPO: ${{ inputs.source_repo }}
-        run: echo "name=${SOURCE_REPO##*/}" >> "${GITHUB_OUTPUT}"
-
-      - name: Generate sandbox token (read-only)
-        id: sandbox-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.FULLSEND_CODER_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_CODER_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.repo-parts.outputs.name }}
-          permission-contents: read
-          permission-issues: read
-          permission-pull-requests: read
-          permission-metadata: read
 
       - name: Generate push token (write)
         id: push-token
