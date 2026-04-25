@@ -1,9 +1,9 @@
 // Package vertex implements the inference.Provider interface for Google Cloud
-// Vertex AI. It supports three modes of credential provisioning:
+// Vertex AI. It supports two auth modes:
 //
-//  1. GCP project ID only → create service account + key
-//  2. GCP project ID + SA name → verify SA exists, create key
-//  3. GCP project ID + credential JSON → use key directly
+//   - SA key (default): long-lived service account key JSON, with sub-modes
+//     for creating, verifying, or using a pre-made key.
+//   - WIF: Workload Identity Federation with GitHub OIDC — no stored keys.
 package vertex
 
 import (
@@ -78,6 +78,9 @@ type Provider struct {
 
 // New creates a Vertex Provider with the given config and GCP client.
 func New(cfg Config, gcpAPI GCPClient) *Provider {
+	if cfg.Mode == "" {
+		cfg.Mode = AuthModeSAKey
+	}
 	return &Provider{cfg: cfg, gcpAPI: gcpAPI}
 }
 
