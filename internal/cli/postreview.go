@@ -1,28 +1,20 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/fullsend-ai/fullsend/internal/forge"
 	gh "github.com/fullsend-ai/fullsend/internal/forge/github"
+	"github.com/fullsend-ai/fullsend/internal/sticky"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
-// ReviewMarker is a hidden HTML comment used to identify fullsend review
-// comments. On re-runs, the CLI searches for this marker to find and
-// update the existing comment instead of creating a new one.
-const ReviewMarker = "<!-- fullsend:review-agent -->"
-
-// maxCommentSize is GitHub's maximum comment body size (65536 chars).
-// We leave a buffer for the marker and details wrapper.
-const maxCommentSize = 65000
+const reviewMarker = "<!-- fullsend:review-agent -->"
 
 func newPostReviewCmd() *cobra.Command {
 	var (
@@ -61,13 +53,21 @@ or reads from stdin if set to "-".`,
 			}
 			owner, repoName := parts[0], parts[1]
 
-			body, err := readReviewBody(result)
+			raw, err := readReviewBody(result)
 			if err != nil {
 				return fmt.Errorf("reading review body: %w", err)
 			}
 
+			parsed := parseReviewResult(raw)
+
+			printer.Header("Post Review")
+
 			client := gh.New(token)
-			return postReview(cmd.Context(), client, owner, repoName, pr, body, dryRun, printer)
+			cfg := sticky.Config{
+				Marker: reviewMarker,
+				DryRun: dryRun,
+			}
+			return sticky.Post(cmd.Context(), client, owner, repoName, pr, parsed.Body, cfg, printer)
 		},
 	}
 
@@ -82,78 +82,14 @@ or reads from stdin if set to "-".`,
 	return cmd
 }
 
-// postReview implements the sticky comment lifecycle:
-// 1. List existing comments to find one with ReviewMarker
-// 2. If found: collapse old content into <details>, edit in-place
-// 3. If not found: create a new comment with the marker
-func postReview(ctx context.Context, client forge.Client, owner, repo string, pr int, body string, dryRun bool, printer *ui.Printer) error {
-	printer.Header("Post Review")
-
-	comments, err := client.ListIssueComments(ctx, owner, repo, pr)
-	if err != nil {
-		return fmt.Errorf("listing comments: %w", err)
-	}
-
-	// Find existing fullsend review comment.
-	var existing *forge.IssueComment
-	for i := range comments {
-		if strings.Contains(comments[i].Body, ReviewMarker) {
-			existing = &comments[i]
-			break
-		}
-	}
-
-	markedBody := ReviewMarker + "\n" + body
-
-	if existing != nil {
-		printer.StepStart("Found existing review comment, updating in-place")
-
-		// Collapse old content into <details>.
-		newBody := buildUpdatedBody(existing.Body, markedBody)
-
-		if dryRun {
-			printer.StepInfo("Dry run — would update comment " + strconv.Itoa(existing.ID))
-			printer.StepInfo("Body length: " + strconv.Itoa(len(newBody)))
-			return nil
-		}
-
-		if err := client.UpdateIssueComment(ctx, owner, repo, existing.ID, newBody); err != nil {
-			return fmt.Errorf("updating comment: %w", err)
-		}
-		printer.StepDone("Review comment updated")
-	} else {
-		printer.StepStart("No existing review comment found, creating new one")
-
-		if dryRun {
-			printer.StepInfo("Dry run — would create new comment")
-			printer.StepInfo("Body length: " + strconv.Itoa(len(markedBody)))
-			return nil
-		}
-
-		if err := createIssueComment(ctx, client, owner, repo, pr, markedBody); err != nil {
-			return fmt.Errorf("creating comment: %w", err)
-		}
-		printer.StepDone("Review comment created")
-	}
-
-	return nil
-}
-
 // readReviewBody reads the review body from a file path or stdin.
 func readReviewBody(path string) (string, error) {
 	if path == "-" {
-		var sb strings.Builder
-		buf := make([]byte, 4096)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if n > 0 {
-				sb.Write(buf[:n])
-			}
-			if err != nil {
-				break
-			}
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("reading stdin: %w", err)
 		}
-		return sb.String(), nil
+		return string(data), nil
 	}
 
 	data, err := os.ReadFile(path)
@@ -161,52 +97,6 @@ func readReviewBody(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-// buildUpdatedBody collapses the old comment body into a <details> block
-// and prepends the new body. Truncates history if exceeding maxCommentSize.
-func buildUpdatedBody(oldBody, newBody string) string {
-	// Strip the marker from the old body for the collapsed section.
-	oldContent := strings.Replace(oldBody, ReviewMarker+"\n", "", 1)
-	oldContent = strings.Replace(oldContent, ReviewMarker, "", 1)
-
-	collapsed := fmt.Sprintf(
-		"\n\n<details>\n<summary>Previous review</summary>\n\n%s\n\n</details>",
-		oldContent,
-	)
-
-	combined := newBody + collapsed
-
-	// Truncate if exceeding GitHub's comment size limit.
-	if len(combined) > maxCommentSize {
-		combined = truncateBody(combined)
-	}
-
-	return combined
-}
-
-// truncateBody trims the body to fit within maxCommentSize, keeping the
-// current review intact and trimming history from the end.
-func truncateBody(body string) string {
-	if len(body) <= maxCommentSize {
-		return body
-	}
-
-	truncationMsg := "\n\n---\n*Previous review history truncated due to comment size limits.*"
-	budget := maxCommentSize - len(truncationMsg)
-	if budget < 0 {
-		budget = 0
-	}
-
-	return body[:budget] + truncationMsg
-}
-
-// createIssueComment creates a new issue comment via the forge Client.
-// The forge.Client interface uses CreateIssueComment which we added
-// alongside UpdateIssueComment.
-func createIssueComment(ctx context.Context, client forge.Client, owner, repo string, number int, body string) error {
-	_, err := client.CreateIssueComment(ctx, owner, repo, number, body)
-	return err
 }
 
 // ReviewResult represents a parsed review result file.

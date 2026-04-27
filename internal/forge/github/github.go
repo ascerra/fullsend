@@ -956,33 +956,41 @@ func (c *LiveClient) CloseIssue(ctx context.Context, owner, repo string, number 
 	return nil
 }
 
-// ListIssueComments returns up to 100 comments on an issue (single page, no pagination).
+// ListIssueComments returns all comments on an issue, paginating automatically.
 func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, number int) ([]forge.IssueComment, error) {
-	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", owner, repo, number))
-	if err != nil {
-		return nil, fmt.Errorf("list issue comments: %w", err)
-	}
-	var raw []struct {
-		ID   int    `json:"id"`
-		Body string `json:"body"`
-		User struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		CreatedAt string `json:"created_at"`
-	}
-	if err := decodeJSON(resp, &raw); err != nil {
-		return nil, fmt.Errorf("decoding issue comments: %w", err)
-	}
-	comments := make([]forge.IssueComment, len(raw))
-	for i, r := range raw {
-		comments[i] = forge.IssueComment{
-			ID:        r.ID,
-			Body:      r.Body,
-			Author:    r.User.Login,
-			CreatedAt: r.CreatedAt,
+	var result []forge.IssueComment
+
+	for page := 1; page <= 100; page++ {
+		resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100&page=%d", owner, repo, number, page))
+		if err != nil {
+			return nil, fmt.Errorf("list issue comments page %d: %w", page, err)
+		}
+		var raw []struct {
+			ID   int    `json:"id"`
+			Body string `json:"body"`
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			CreatedAt string `json:"created_at"`
+		}
+		if err := decodeJSON(resp, &raw); err != nil {
+			return nil, fmt.Errorf("decoding issue comments page %d: %w", page, err)
+		}
+
+		for _, r := range raw {
+			result = append(result, forge.IssueComment{
+				ID:        r.ID,
+				Body:      r.Body,
+				Author:    r.User.Login,
+				CreatedAt: r.CreatedAt,
+			})
+		}
+
+		if len(raw) < 100 {
+			break
 		}
 	}
-	return comments, nil
+	return result, nil
 }
 
 // CreateIssueComment creates a new comment on an issue or pull request.
@@ -1058,7 +1066,17 @@ func (c *LiveClient) MinimizeComment(ctx context.Context, owner, repo string, co
 	if err != nil {
 		return fmt.Errorf("minimize comment %d: %w", commentID, err)
 	}
-	gqlResp.Body.Close()
+	var gqlResult struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := decodeJSON(gqlResp, &gqlResult); err != nil {
+		return fmt.Errorf("decode minimize response: %w", err)
+	}
+	if len(gqlResult.Errors) > 0 {
+		return fmt.Errorf("minimize comment %d: %s", commentID, gqlResult.Errors[0].Message)
+	}
 	return nil
 }
 
@@ -1260,9 +1278,9 @@ func (c *LiveClient) CreateOrgSecret(ctx context.Context, org, name, value strin
 		selectedRepoIDs = []int64{}
 	}
 	payload := map[string]any{
-		"encrypted_value":         base64.StdEncoding.EncodeToString(encrypted),
-		"key_id":                  pubKey.KeyID,
-		"visibility":              "selected",
+		"encrypted_value":       base64.StdEncoding.EncodeToString(encrypted),
+		"key_id":                pubKey.KeyID,
+		"visibility":            "selected",
 		"selected_repository_ids": selectedRepoIDs,
 	}
 
