@@ -131,8 +131,10 @@ jobs:
               exit 1
             fi
 
+            echo "::add-mask::$OIDC_AUTH"
             OIDC_DEST="$RUNNER_TEMP/gcp-oidc-token"
             curl -sSf -H "Authorization: $OIDC_AUTH" "$OIDC_URL" > "$OIDC_DEST"
+            chmod 600 "$OIDC_DEST"
 
             SANDBOX_CREDS="$RUNNER_TEMP/sandbox-gcp-credentials.json"
             jq '{
