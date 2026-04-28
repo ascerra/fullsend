@@ -40,7 +40,10 @@ func Post(ctx context.Context, client forge.Client, owner, repo string, number i
 		return fmt.Errorf("marker is empty")
 	}
 
-	botUser, _ := client.GetAuthenticatedUser(ctx)
+	botUser, err := client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		printer.StepInfo("Could not determine bot user, marker spoofing protection degraded")
+	}
 
 	comments, err := client.ListIssueComments(ctx, owner, repo, number)
 	if err != nil {
@@ -116,9 +119,10 @@ var legacyDetailsRe = regexp.MustCompile(`(?s)<details>\s*<summary>Previous [^<]
 // <details> blocks and prepends the new body. Footer content (delimited
 // by FooterMarker) is stripped before collapsing and re-appended after.
 func BuildUpdatedBody(oldBody, newBody string, cfg Config) string {
-	// Strip marker from the old body.
-	oldContent := strings.Replace(oldBody, cfg.Marker+"\n", "", 1)
-	oldContent = strings.Replace(oldContent, cfg.Marker, "", 1)
+	// Strip marker from the old body (prefix-only to avoid matching
+	// the marker if it appears embedded in review content).
+	oldContent, _ := strings.CutPrefix(oldBody, cfg.Marker+"\n")
+	oldContent, _ = strings.CutPrefix(oldContent, cfg.Marker)
 
 	// Strip footer if configured.
 	var footer string
