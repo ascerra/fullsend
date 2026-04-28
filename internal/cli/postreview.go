@@ -18,7 +18,8 @@ import (
 
 const reviewMarker = "<!-- fullsend:review-agent -->"
 
-var hexSHARe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
+var hexSHARe = regexp.MustCompile(`^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$`)
+var reasonRe = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
 
 func newPostReviewCmd() *cobra.Command {
 	var (
@@ -201,6 +202,11 @@ The review agent reviewed commit `+"`%s`"+` but the PR HEAD is now `+"`%s`"+`. T
 func postFailureNotice(ctx context.Context, client forge.Client, owner, repo string, pr int, parsed ReviewResult, cfg sticky.Config, printer *ui.Printer) error {
 	printer.StepStart("Review agent reported failure, posting notice")
 
+	reason := parsed.Reason
+	if !reasonRe.MatchString(reason) {
+		reason = "invalid-reason"
+	}
+
 	var body string
 	if parsed.Body != "" {
 		body = parsed.Body
@@ -210,7 +216,7 @@ func postFailureNotice(ctx context.Context, client forge.Client, owner, repo str
 **Outcome:** failure
 **Reason:** %s
 
-This PR was NOT reviewed. Do not count this as an approval.`, parsed.Reason)
+This PR was NOT reviewed. Do not count this as an approval.`, reason)
 	}
 
 	if err := sticky.Post(ctx, client, owner, repo, pr, body, cfg, printer); err != nil {

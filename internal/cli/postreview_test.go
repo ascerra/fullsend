@@ -254,14 +254,16 @@ func TestHexSHAValidation(t *testing.T) {
 		sha   string
 		valid bool
 	}{
-		{"abc123f", true},
-		{"abc123def456", true},
-		{"abc123def456abc123def456abc123def456abc123", true},
-		{"", true}, // empty is valid (means "no SHA provided")
-		{"not-hex!", false},
-		{"abc 123", false},
-		{"abc123`inject", false},
-		{"ABC123DEF456", true},
+		{"abc123f", false},                                                                    // too short (7 chars)
+		{"abc123def456", false},                                                               // too short (12 chars)
+		{"abc123def456abc123def456abc123def456abcd", true},                                     // 40-char SHA-1
+		{"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", true},  // 64-char SHA-256
+		{"abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567890", false}, // 65 chars (too long)
+		{"", true},          // empty is valid (means "no SHA provided")
+		{"not-hex!", false},  // non-hex chars
+		{"abc 123", false},   // spaces
+		{"abc123`inject", false}, // backtick injection
+		{"ABC123DEF456ABC123DEF456ABC123DEF456ABCD", true}, // uppercase 40-char
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("sha=%q", tt.sha), func(t *testing.T) {
@@ -270,6 +272,26 @@ func TestHexSHAValidation(t *testing.T) {
 				return
 			}
 			assert.Equal(t, tt.valid, hexSHARe.MatchString(tt.sha))
+		})
+	}
+}
+
+func TestReasonValidation(t *testing.T) {
+	tests := []struct {
+		reason string
+		valid  bool
+	}{
+		{"agent-no-output", true},
+		{"tool_failure", true},
+		{"token-limit", true},
+		{"", true},
+		{"reason with spaces", false},
+		{"markdown\n**injection**", false},
+		{"<script>alert(1)</script>", false},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("reason=%q", tt.reason), func(t *testing.T) {
+			assert.Equal(t, tt.valid, reasonRe.MatchString(tt.reason))
 		})
 	}
 }
