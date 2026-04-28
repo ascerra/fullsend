@@ -827,6 +827,11 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 	)
 }
 
+// maxContextScanDepth is the maximum directory depth for scanning context
+// files. Shared between host-side (scanRepoContextFiles) and sandbox-side
+// (buildScanContextCommand) scans to ensure parity.
+const maxContextScanDepth = 5
+
 // buildScanContextCommand builds the SSH command to run `fullsend scan context`
 // inside the sandbox. It finds known context files (including SKILL.md in
 // skill directories) in the repo directory and passes them as arguments.
@@ -871,17 +876,16 @@ func buildScanContextCommand(repoDir, traceID string) string {
 	)
 }
 
-// maxContextScanDepth is the maximum directory depth for scanning context
-// files. Shared between host-side (scanRepoContextFiles) and sandbox-side
-// (buildScanContextCommand) scans to ensure parity.
-const maxContextScanDepth = 5
-
 // scanRepoContextFiles walks the target repo directory for known context
 // files (CLAUDE.md, AGENTS.md, SKILL.md, etc.) and runs the InputPipeline
 // on each. Returns all findings across scanned files.
 func scanRepoContextFiles(repoDir string) []security.Finding {
-	const maxScanDepth = maxContextScanDepth
 	const maxContextFileSize int64 = 1 << 20 // 1 MB
+
+	skipDirs := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true,
+		"__pycache__": true, ".venv": true,
+	}
 
 	pipeline := security.InputPipeline()
 	var allFindings []security.Finding
@@ -902,8 +906,11 @@ func scanRepoContextFiles(repoDir string) []security.Finding {
 			return nil
 		}
 		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
 			rel, _ := filepath.Rel(repoDir, path)
-			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxScanDepth-1 {
+			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxContextScanDepth-1 {
 				return filepath.SkipDir
 			}
 			return nil
@@ -914,15 +921,39 @@ func scanRepoContextFiles(repoDir string) []security.Finding {
 		if !security.ShouldScan(d.Name()) {
 			return nil
 		}
+		relPath, _ := filepath.Rel(repoDir, path)
 		info, err := d.Info()
-		if err != nil || info.Size() > maxContextFileSize {
+		if err != nil {
+			allFindings = append(allFindings, security.Finding{
+				Scanner:  "context_injection",
+				Name:     "scan_error",
+				Severity: "medium",
+				Detail:   fmt.Sprintf("%s: could not stat file: %v", relPath, err),
+				Position: -1,
+			})
+			return nil
+		}
+		if info.Size() > maxContextFileSize {
+			allFindings = append(allFindings, security.Finding{
+				Scanner:  "context_injection",
+				Name:     "file_too_large",
+				Severity: "medium",
+				Detail:   fmt.Sprintf("%s: skipped, exceeds %d byte limit (%d bytes)", relPath, maxContextFileSize, info.Size()),
+				Position: -1,
+			})
 			return nil
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
+			allFindings = append(allFindings, security.Finding{
+				Scanner:  "context_injection",
+				Name:     "scan_error",
+				Severity: "medium",
+				Detail:   fmt.Sprintf("%s: could not read file: %v", relPath, err),
+				Position: -1,
+			})
 			return nil
 		}
-		relPath, _ := filepath.Rel(repoDir, path)
 		result := pipeline.Scan(string(content))
 		for i := range result.Findings {
 			result.Findings[i].Detail = fmt.Sprintf("%s: %s", relPath, result.Findings[i].Detail)
