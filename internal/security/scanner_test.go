@@ -224,7 +224,7 @@ func TestHasCriticalFindings(t *testing.T) {
 	assert.False(t, HasCriticalFindings(nil))
 }
 
-func TestSkillFileInjectionDetected(t *testing.T) {
+func TestContextInjectionScanner_SkillFiles(t *testing.T) {
 	s := NewContextInjectionScanner()
 
 	t.Run("skill with injection", func(t *testing.T) {

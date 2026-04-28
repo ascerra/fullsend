@@ -324,7 +324,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		if security.HasCriticalFindings(findings) {
 			if h.FailModeClosed() {
 				printer.StepFail("BLOCKED: critical injection findings in target repo context files")
-				return fmt.Errorf("target repo context scan blocked: critical findings detected")
+				return fmt.Errorf("target repo context scan blocked: critical injection findings")
 			}
 			printer.StepWarn("Target repo has critical injection findings (fail_mode: open)")
 		} else if len(findings) > 0 {
@@ -872,27 +872,54 @@ func buildScanContextCommand(repoDir, traceID string) string {
 // files (CLAUDE.md, AGENTS.md, SKILL.md, etc.) and runs the InputPipeline
 // on each. Returns all findings across scanned files.
 func scanRepoContextFiles(repoDir string) []security.Finding {
+	const maxScanDepth = 5
+	const maxContextFileSize int64 = 1 << 20 // 1 MB
+
 	pipeline := security.InputPipeline()
 	var allFindings []security.Finding
 
-	_ = filepath.WalkDir(repoDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	err := filepath.WalkDir(repoDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			rel, _ := filepath.Rel(repoDir, path)
+			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxScanDepth {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		if !security.ShouldScan(d.Name()) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > maxContextFileSize {
 			return nil
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
+		relPath, _ := filepath.Rel(repoDir, path)
 		result := pipeline.Scan(string(content))
 		for i := range result.Findings {
-			result.Findings[i].Detail = fmt.Sprintf("%s: %s", path, result.Findings[i].Detail)
+			result.Findings[i].Detail = fmt.Sprintf("%s: %s", relPath, result.Findings[i].Detail)
 		}
 		allFindings = append(allFindings, result.Findings...)
 		return nil
 	})
+	if err != nil {
+		allFindings = append(allFindings, security.Finding{
+			Scanner:  "context_injection",
+			Name:     "scan_error",
+			Severity: "high",
+			Detail:   fmt.Sprintf("failed to walk repo directory: %v", err),
+			Position: -1,
+		})
+	}
 
 	return allFindings
 }
