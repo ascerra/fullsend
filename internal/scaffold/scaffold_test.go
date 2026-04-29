@@ -60,6 +60,17 @@ func TestShimTemplateContent(t *testing.T) {
 	assert.Contains(t, s, "contents: read")
 }
 
+func TestShimDispatchCodeExcludesPRContext(t *testing.T) {
+	content, err := FullsendRepoFile("templates/shim-workflow.yaml")
+	require.NoError(t, err)
+	s := string(content)
+
+	// The dispatch-code job's issue_comment branch must exclude PR contexts
+	// so /code only fires on issue comments, not PR comments. See #533.
+	assert.Contains(t, s, "!github.event.issue.pull_request",
+		"dispatch-code must exclude PR contexts with !github.event.issue.pull_request guard")
+}
+
 func TestWalkFullsendRepo(t *testing.T) {
 	var paths []string
 	err := WalkFullsendRepo(func(path string, content []byte) error {
