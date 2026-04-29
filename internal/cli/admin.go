@@ -431,6 +431,11 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 // discovered (eligible) repo list. Repos filtered out by ListOrgRepos
 // (forks, archived) will not appear in discoveredNames, so this catches
 // the case where a user targets a fork or archived repo.
+//
+// This validation exists because fullsend's trust model is org-centric:
+// forks may live outside the org's permission boundary or lack the same
+// CODEOWNERS governance, and archived repos have no active development.
+// See the ListOrgRepos comment in forge.Client for the full rationale.
 func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
 	if len(enabledRepos) == 0 {
 		return nil

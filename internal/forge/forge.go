@@ -86,6 +86,15 @@ type Installation struct {
 // Implementations exist for GitHub (and eventually GitLab, Forgejo).
 type Client interface {
 	// Repository operations
+	// ListOrgRepos returns repositories eligible for fullsend installation.
+	// It excludes archived repos (no active development) and forks.
+	//
+	// Forks are excluded because fullsend's trust model is org-centric:
+	// trust derives from org repository permissions and CODEOWNERS
+	// governance. Forks may live outside the org's permission boundary
+	// or lack the same CODEOWNERS configuration, which could bypass
+	// human-approval gates. Installing on both a fork and its upstream
+	// also risks duplicate agent PRs and conflicting changes.
 	ListOrgRepos(ctx context.Context, org string) ([]Repository, error)
 	GetRepo(ctx context.Context, owner, repo string) (*Repository, error)
 	CreateRepo(ctx context.Context, org, name, description string, private bool) (*Repository, error)

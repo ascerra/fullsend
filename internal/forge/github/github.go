@@ -236,6 +236,12 @@ func decodeJSON(resp *http.Response, v any) error {
 }
 
 // ListOrgRepos returns all non-archived, non-fork repositories for an org.
+//
+// Forks are excluded because fullsend's trust model assumes org-owned repos
+// where CODEOWNERS governance and org-level permissions control agent
+// autonomy. Fork repos may have different ownership and CODEOWNERS configs,
+// which could bypass human-approval gates. Archived repos are excluded
+// because they represent inactive targets where agent work would be wasted.
 func (c *LiveClient) ListOrgRepos(ctx context.Context, org string) ([]forge.Repository, error) {
 	var result []forge.Repository
 
