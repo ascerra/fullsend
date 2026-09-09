@@ -343,6 +343,9 @@ the repo's CODEOWNERS and review process
   forge driver re-fetches current policy, review, check, human-intent, and
   head-SHA state before requesting the normal merge or queue mechanism; it
   never uses an administrator bypass ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md)).
+- The dedicated stage is the sole Fullsend-owned autonomous-merge path. The
+  legacy Code-agent `CODE_AUTO_MERGE*` environment variables and post-script
+  implementation are removed rather than retained as a compatibility fallback.
 - The model sandbox has no merge-capable credential. The driver uses a
   constrained host-side capability bound to the expected head, while repository
   branch protection and merge queues remain the final enforcement boundary.

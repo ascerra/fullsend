@@ -22,9 +22,11 @@ Accepted
 
 ## Context
 
-Fullsend already has a legacy `CODE_AUTO_MERGE` path in the Code post-script,
-but the current product direction calls for a dedicated, opt-in auto-merge
-agent ([agents#1132](https://github.com/fullsend-ai/agents/issues/1132)).
+Fullsend currently has a legacy `CODE_AUTO_MERGE` path in the Code post-script,
+while the product direction calls for a dedicated, opt-in auto-merge agent
+([agents#1132](https://github.com/fullsend-ai/agents/issues/1132)). Keeping both
+paths would create two Fullsend-owned ways to authorize autonomous merging and
+would make repository policy and operational auditing ambiguous.
 Review determines whether a change is acceptable; merge authorization must also
 account for current repository policy, required checks, human intent, and the
 exact pull-request revision. Combining those responsibilities makes it harder
@@ -63,9 +65,19 @@ use an administrator bypass.
 
 The sandbox receives read-only evidence and no merge-capable credential. Any
 write-capable merge identity or short-lived capability remains host-side and
-exposes only the constrained operation needed by the driver. The legacy
-`CODE_AUTO_MERGE` behavior is compatibility work to audit and migrate; it is
-not the authority boundary for the dedicated stage.
+exposes only the constrained operation needed by the driver.
+
+The dedicated stage is the sole Fullsend-owned path for autonomous merge. The
+`CODE_AUTO_MERGE` and `CODE_AUTO_MERGE_METHOD` variables and their Code
+post-script implementation will be removed from the agents repository,
+including generated bundles, forge helpers, tests, and user documentation. They
+will not be aliased or migrated as a compatibility fallback. Existing values
+therefore have no effect; repositories that want autonomous merging must opt in
+to the dedicated stage. Forge-native or third-party automation, such as
+Renovate's own `automerge` setting, is outside this Fullsend-owned stage
+contract and requires separate policy ownership and audit.
+
+The implementation removal is tracked in [agents#1219](https://github.com/fullsend-ai/agents/pull/1219).
 
 ## Consequences
 
@@ -73,4 +85,4 @@ not the authority boundary for the dedicated stage.
 - The first implementation needs a host-side policy/forge driver, structured review attestation, and integration coverage for direct merges and merge queues.
 - Repositories retain branch protection and queue enforcement as the final forge boundary; Fullsend cannot override failed requirements.
 - Observe-only and explicit human-trigger modes can be deployed before automatic mutation, while unknown state waits for a human.
-- A separate stage and capability identity add configuration and migration work, including reconciliation with the existing Code post-script path.
+- The legacy Code auto-merge path is intentionally removed, so existing `CODE_AUTO_MERGE*` configuration must be replaced by dedicated-stage policy; this avoids split-brain enablement and makes the migration auditable.
