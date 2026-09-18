@@ -376,10 +376,20 @@ the repo's CODEOWNERS and review process
 **Decided:**
 
 - Autonomous merge is a separate `auto-merge` stage, opt-in per repository and
-  disabled by default. It consumes structured Review evidence, but a host-side
-  forge driver re-fetches current policy, review, check, human-intent, and
-  head-SHA state before requesting the normal merge or queue mechanism; it
-  never uses an administrator bypass ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md)).
+  disabled by default. The model is advisory: it evaluates semantic eligibility
+  but never holds a merge-capable credential or authorizes mutation. A host-side
+  forge driver re-fetches current policy, review, check, human-intent signal, head-SHA,
+  base branch, and base-SHA state before requesting the normal merge or queue
+  mechanism; it never uses an administrator bypass.
+- Every decision is bound to an immutable tuple `(repository,
+  pull_request_number, head_sha, base_ref, base_sha, policy_fingerprint)` and
+  recorded in a write-ahead receipt before mutation. The authority boundary and
+  binding-tuple verification chain have been validated in a private integration
+  lab with 27 adversarial test cases; remaining work is production hardening
+  (purpose-built merge identity, per-PR lease, idempotent receipt store, branch
+  protection validation)
+  ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md);
+  [Auto-Merge Contract v1](normative/auto-merge/v1/)).
 - The dedicated stage is the sole Fullsend-owned autonomous-merge path. The
   legacy Code-agent `CODE_AUTO_MERGE*` environment variables and post-script
   implementation will be removed rather than retained as a compatibility

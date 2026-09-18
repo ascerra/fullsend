@@ -28,6 +28,22 @@ Version 1 is GitHub-first and same-repository only. GitLab support,
 cross-repository pull requests, broad source-code cohorts, and model-selected
 policy are outside the first mutation-capable release.
 
+### Validation evidence
+
+The authority boundary, binding-tuple verification chain, and fail-closed
+behavior have been validated in a private integration lab
+([ADR 0110 § Lab validation](../../../ADRs/0110-dedicated-auto-merge-authority-boundary.md#lab-validation)).
+The lab exercised the complete path from issue through triage, coding,
+review/fix, CI, semantic eligibility evaluation, and exact-head merge, with 27
+adversarial unit tests covering stale approvals, pending and failed checks,
+hold labels, disallowed paths, missing and oversized patches, unknown
+mergeability, stale base, stale merge preview, native auto-merge enabled,
+unsigned commits, unresolved threads, changes-requested reviews, tampered
+bindings, and receipt ordering. The lab's key discoveries — pull-request base
+metadata staleness, the need for live-base and merge-preview parent
+verification, and the explicit patch-evidence requirement — are incorporated
+into this contract.
+
 ## Desired outcome
 
 Fullsend should be able to merge a narrowly allowlisted class of pull requests
@@ -38,7 +54,8 @@ would govern a human merge.
 The feature is successful only when an autonomous merge is:
 
 - **authorized** by current repository policy and trusted human intent;
-- **bound** to the exact head revision that was reviewed;
+- **bound** to the exact head revision, base branch, and base state that were
+  reviewed;
 - **least-privileged**, with no merge-capable credential exposed to the model;
 - **fail-closed** when required state is stale, missing, contradictory, or
   unknown;
@@ -72,51 +89,60 @@ Version 1 does not:
 
 Every implementation and test suite must preserve these invariants.
 
-**AM-1 — One Fullsend-owned path.** The dedicated `auto-merge` stage is the
-only Fullsend-owned autonomous-merge path. Code, Review, Fix, Retro, and custom
+**One Fullsend-owned path.** The dedicated `auto-merge` stage is the only
+Fullsend-owned autonomous-merge path. Code, Review, Fix, Retro, and custom
 post-scripts must not provide an alternate environment-variable or side-effect
 path to autonomous merge.
 
-**AM-2 — Assessment is not authority.** An agent result can recommend
-`eligible`; it cannot grant merge authority. Only the host-side gate may
-authorize the forge driver after fresh revalidation.
+**Assessment is not authority.** An agent result can recommend `eligible`; it
+cannot grant merge authority. Only the host-side gate may authorize the forge
+driver after fresh revalidation.
 
-**AM-3 — Exact-head binding.** The reviewed head SHA, evaluated head SHA,
+**Exact-head and base binding.** The reviewed head SHA, evaluated head SHA,
 freshly observed head SHA, and head supplied to the mutation operation must be
-equal. Any mismatch produces a non-mutating stale result.
+equal. The base branch and base SHA observed during Review must match the
+current base; a retarget or base update invalidates the attestation. Any
+mismatch produces a non-mutating stale result.
 
-**AM-4 — Current policy wins.** The final gate uses current policy, rulesets,
-reviews, checks, holds, cohort membership, and pull-request state. A cached
+**Current policy wins.** The final gate uses current policy, rulesets, reviews,
+checks, holds, cohort membership, and pull-request state. A cached
 pre-inference snapshot cannot authorize a mutation.
 
-**AM-5 — Unknown never passes.** Unavailable or indeterminate authoritative
-state is represented explicitly as unknown and results in `waiting`,
-`needs_human`, or `platform_error`; it is never converted to eligible.
+**Unknown never passes.** Unavailable or indeterminate authoritative state is
+represented explicitly as unknown and results in `waiting`, `needs_human`, or
+`platform_error`; it is never converted to eligible.
 
-**AM-6 — Normal forge enforcement.** The driver requests only a repository-
-allowed merge method or the required merge queue. It never uses an
-administrator bypass or weakens repository protection.
+**Normal forge enforcement.** The driver requests only a repository-allowed
+merge method or the required merge queue. It never uses an administrator bypass
+or weakens repository protection.
 
-**AM-7 — Credential isolation.** The Auto-Merge evaluator sandbox receives no
+**Credential isolation.** The Auto-Merge evaluator sandbox receives no
 merge-capable credential. The host exposes only a constrained operation bound
 to the selected repository, pull request, expected head, and policy snapshot.
 
-**AM-8 — Human veto.** A trusted current hold, changes-requested review, missing
-required human approval, or human-required finding vetoes autonomous merge.
-An untrusted actor cannot grant authority or remove a trusted veto.
+**Human veto.** A trusted current hold, changes-requested review, missing
+required human approval, or human-required finding vetoes autonomous merge. An
+untrusted actor cannot grant authority or remove a trusted veto.
 
-**AM-9 — At-most-once mutation request.** A run may issue at most one merge or
-queue request. A repository/PR lease and idempotency key prevent concurrent runs
-from issuing duplicate requests for the same head and policy version.
+**At-most-once mutation request.** A run may issue at most one merge or queue
+request. A repository/PR lease and idempotency key prevent concurrent runs from
+issuing duplicate requests for the same head, base, and policy fingerprint.
 
-**AM-10 — Observe/live parity.** Observe mode executes the same candidate,
-assessment, and final authorization logic as live mode. Its only intentional
-difference is that it has no write capability and replaces the mutation with a
-recorded preview.
+**Observe/live parity.** Observe mode executes the same candidate, assessment,
+and final authorization logic as live mode. Its only intentional difference is
+that it has no write capability and replaces the mutation with a recorded
+preview.
 
-**AM-11 — Auditable outcome.** Every terminal decision has stable reason codes.
-Every mutation request has a durable receipt that identifies the reviewed head,
+**Auditable outcome.** Every terminal decision has stable reason codes. Every
+mutation request has a durable receipt that identifies the reviewed head,
 policy, actors, checks, mechanism, and result without recording credentials.
+
+**Write-ahead receipt.** A durable pending receipt containing the authorization
+snapshot, request identity, and idempotency key must be persisted before the
+forge request is issued. If the host crashes after the forge accepts the
+request but before completion is recorded, startup or asynchronous
+reconciliation must complete the pending receipt by inspecting current forge
+state.
 
 ## Architecture and authority boundary
 
@@ -138,6 +164,45 @@ flowchart LR
     Q --> R[Receipt and outcome telemetry]
 ```
 
+### Binding tuple
+
+Every autonomous merge decision applies to exactly one immutable tuple:
+
+```text
+(repository, pull_request_number, head_sha, base_ref, base_sha, policy_fingerprint)
+```
+
+The policy fingerprint is a cryptographic hash of the canonical policy state
+(mode, cohorts, protected paths, allowed methods, kill-switch state, and all
+other fields that affect authorization decisions). Two policy loads with
+identical content produce the same fingerprint regardless of load time.
+
+Changing any member invalidates the decision. The tuple is established during
+deterministic preflight, bound in the model's structured output via the context
+fingerprint and explicit head/base fields, and re-verified during authoritative
+postflight before any mutation. Every data contract, receipt, and authorization
+snapshot must carry the complete tuple, and every revalidation must confirm it
+against live forge state.
+
+### Three trust zones
+
+The architecture separates into three trust zones:
+
+1. **Trusted runner pre-script** — reads live forge state, applies deterministic
+   policy, assembles bounded secret-free evidence with a canonical integrity
+   hash, and rejects ineligible candidates before model invocation.
+2. **Credential-free model sandbox** — evaluates semantic questions that
+   deterministic checks cannot answer. Receives no merge-capable credential, no forge
+   write token, and no network authority to mutate the pull request.
+3. **Trusted runner post-script** — persists the write-ahead receipt, re-runs
+   every mutable gate against live forge state, and may merge only the exact
+   approved head via the forge's compare-and-swap operation.
+
+AI intelligence is not the safety-critical property. The host-side scripts are.
+The model may tighten the decision but cannot override any deterministic veto.
+A compromised or prompt-injected model output cannot cause a merge because the
+post-script independently re-verifies every authoritative fact.
+
 ### Component responsibilities
 
 #### Stage dispatcher
@@ -153,6 +218,18 @@ to merge.
 The filter performs cheap, authoritative checks before model inference. It
 rejects obviously ineligible pull requests and emits reason codes without
 spending model capacity. It must not reinterpret unknown state as a pass.
+
+The filter must fetch the live base-branch SHA directly from the branch, not
+trust only the base SHA embedded in the pull-request payload. Lab testing
+revealed that GitHub's pull-request payload and synthetic merge preview can
+remain based on an older base revision even while the UI describes the PR as
+clean. When a merge preview is available, the filter must verify that its ordered
+parent tuple is exactly `[live_base_sha, head_sha]`.
+
+The implementation should accumulate all failing conditions into the result
+rather than short-circuiting on the first failure. This ensures receipts and
+reason codes capture every ineligibility reason, making debugging and auditing
+substantially easier.
 
 #### Auto-Merge agent
 
@@ -223,14 +300,23 @@ An implementation may evaluate after:
 - an authorized explicit Auto-Merge command is issued.
 
 Events are hints that state may have changed. The event payload itself is not
-authoritative evidence for the final gate.
+authoritative evidence for the final gate. An event that arrives before the
+pull request is ready (e.g., a review approval while CI is still running) must
+stop cheaply at the deterministic candidate filter without spending model
+inference. This makes multiple trigger paths practical: each trigger is a
+low-cost wake-up signal, and all readiness logic lives in the single preflight
+rather than being duplicated across trigger implementations.
 
 ### Lifecycle
 
 1. **Normalize and authorize the event.** Resolve forge, repository, pull
    request, actor, and transition through existing Fullsend dispatch controls.
-2. **Coalesce work.** Cancel or supersede obsolete evaluations and allow at most
-   one current evaluation per forge/repository/pull-request key.
+2. **Coalesce work.** Preserve the active run and allow at most one pending
+   evaluation per forge/repository/pull-request key, following
+   [ADR 0106](../../../ADRs/0106-serialize-agent-runs-and-coalesce-subsequent-events.md).
+   A second trigger that arrives while a run is active replaces any prior
+   pending evaluation rather than starting a concurrent one; at most one
+   pending evaluation survives per key.
 3. **Load policy.** Resolve global, installation, repository, cohort, and PR
    controls and record a policy fingerprint.
 4. **Run the candidate filter.** Reject disabled, closed, draft, unsupported,
@@ -241,18 +327,20 @@ authoritative evidence for the final gate.
    it and validate the returned schema outside the model.
 7. **Acquire lease.** Lock the forge/repository/pull-request key and re-check
    idempotency for the current head and policy fingerprint.
-8. **Revalidate under the lease.** Re-fetch the pull request, head, Review
-   attestation, checks, reviews, human gates, changed paths, rulesets, queue
-   state, mode, and policy. The lease remains held through the forge request.
-9. **Request the normal forge operation.** In live modes only, issue one
-   expected-head-bound direct merge or queue request. In observe mode, record
-   the same request as a preview without write credentials.
+8. **Revalidate under the lease.** Re-fetch the pull request, head, base
+   branch, base SHA, Review attestation, checks, reviews, human-intent signals, changed
+   paths, rulesets, queue state, mode, and policy. The lease remains held through the forge
+   request.
+9. **Request the normal forge operation.** Persist a pending receipt before
+   the forge call. In live modes only, issue one expected-head-bound direct
+   merge or queue request. In observe mode, record the same request as a
+   preview without write credentials.
 10. **Record the result.** Emit stable reason codes, a final authorization
     snapshot, and, for any mutation attempt, a merge receipt. Later events may
     resume a waiting pull request from step 3; they do not reuse stale authority.
 
 The durable idempotency key must include forge, repository, pull request, head
-SHA, policy fingerprint, and requested operation. A timed-out request with an
+SHA, base branch, base SHA, policy fingerprint, and requested operation. A timed-out request with an
 unknown result is reconciled against current forge state before any retry.
 
 ### State model
@@ -275,14 +363,18 @@ must map unambiguously to this vocabulary:
 - **`observed`** — observe mode completed without requesting a mutation;
 - **`queued`** — GitHub accepted the pull request into its normal merge queue;
 - **`merged`** — GitHub reports a completed merge;
-- **`no_op`** — the pull request was already queued, merged, or closed; and
+- **`no_op`** — the pull request was already queued, merged, closed, or
+  removed from the merge queue; and
 - **`platform_error`** — the platform could not obtain or persist required
   authoritative state.
 
-Only `authorizing` may transition to `queued` or `merged`, and only the
-host-side gate may enter `authorizing`. `eligible` alone is never a mutation
-state. Every new head or policy fingerprint starts a new lifecycle and makes
-the prior `eligible`, `waiting`, or `stale` record non-authoritative.
+Only `authorizing` may transition to `queued` or `merged` via a mutation
+request, and only the host-side gate may enter `authorizing`. A trusted forge
+event (queue completion or removal) may transition `queued` to `merged` or
+`no_op` without a new mutation request; this updates the original receipt.
+`eligible` alone is never a mutation state. Every new head or policy fingerprint
+starts a new lifecycle and makes the prior `eligible`, `waiting`, or `stale`
+record non-authoritative.
 
 ## Policy model
 
@@ -375,7 +467,7 @@ Review produces a structured attestation for one exact pull-request head. It
 contains:
 
 - schema version, forge, repository, pull-request number, and base branch;
-- base revision observed and `reviewed_head_sha`;
+- base branch and base SHA observed, and `reviewed_head_sha`;
 - Review run identifier, completion timestamp, and freshness/expiry data;
 - verdict and open finding counts by severity;
 - separate agent-remediable and human-required findings;
@@ -405,6 +497,13 @@ The host-generated context passed to the evaluator contains:
 Unavailable facts are encoded as unknown, not omitted or defaulted to success.
 The context must be serializable as a secret-free fixture for replay tests.
 
+The context must include a canonical integrity hash (the *context fingerprint*
+referenced elsewhere in this contract) computed over its content (with the hash
+field itself excluded from the computation). The post-script must recompute and
+verify this hash against the host-retained copy of the context before trusting
+pre-script evidence. This prevents tampering between trust zones and enables
+the receipt to reference the exact evidence that was evaluated.
+
 ### `AutoMergeEligibilityResult`
 
 The agent returns exactly one structured result with:
@@ -412,7 +511,13 @@ The agent returns exactly one structured result with:
 - schema version;
 - decision: `eligible`, `ineligible`, `needs_human`, `waiting`, `stale`, or
   `platform_error`;
-- reviewed and observed head SHAs;
+- reviewed head SHA (from the Review attestation) and evaluated head SHA
+  (the `AutoMergeContext.head_sha` the agent assessed against; the exact-head
+  and base binding invariant requires these to be equal);
+- base branch and base SHA (from `AutoMergeContext`; the exact-head and base
+  binding invariant requires these to match the Review attestation);
+- context fingerprint (the canonical integrity hash from the input
+  `AutoMergeContext`);
 - candidate cohort and risk classification;
 - one or more stable reason codes;
 - concise human-readable summary;
@@ -425,17 +530,19 @@ extra authority-bearing fields. In particular, the result cannot contain a
 credential, arbitrary command, permission override, alternate repository,
 alternate pull request, or replacement head SHA.
 
-An `eligible` result is valid only for the context fingerprint and head SHA on
-which it was produced. It expires when either changes.
+An `eligible` result is valid only for the context fingerprint, head SHA, base
+branch, and base SHA on which it was produced. It expires when any of these
+changes.
 
 ### `FinalAuthorizationSnapshot`
 
 Immediately before mutation, the host records the evidence it actually used:
 
-- final observed head and base;
+- final observed head SHA, base branch, and base SHA;
+- context fingerprint (from the evaluated `AutoMergeContext`);
 - current policy fingerprint and mode;
 - Review attestation identifier and reviewed head;
-- required check, review, CODEOWNERS, and human-veto summaries;
+- required check, review, CODEOWNERS, and human-intent signal summaries;
 - current cohort and protected-path result;
 - ruleset, allowed method, and queue decision;
 - lease and idempotency key; and
@@ -448,12 +555,13 @@ called.
 
 Every merge or queue request produces a durable receipt containing:
 
-- forge, repository, pull request, base branch, and canonical URL;
+- forge, repository, pull request, base branch, base SHA, and canonical URL;
 - reviewed, evaluated, final observed, and requested head SHAs;
+- context fingerprint;
 - merge commit SHA when available;
-- cohort, policy version/fingerprint, and mode;
+- cohort, policy fingerprint, and mode;
 - Review run, Auto-Merge run, and driver request identifiers;
-- summarized checks, reviews, CODEOWNERS, and human gates;
+- summarized checks, reviews, CODEOWNERS, and human-intent signals;
 - forge mechanism, merge method, and capability identity;
 - implementation, evaluator, runtime, and harness fingerprints;
 - decision, authorization, request, and completion timestamps; and
@@ -483,8 +591,10 @@ may evolve without changing their meaning.
 
 ### CI and forge outcomes
 
-- `ci_pending`, `mergeability_unknown`, and `merge_conflict` are waiting
-  outcomes unless the configured merge queue explicitly owns the pending checks.
+- `ci_pending` and `mergeability_unknown` are waiting outcomes unless the
+  configured merge queue explicitly owns the pending checks.
+- `merge_conflict` is always a waiting outcome; a merge queue cannot resolve a
+  conflict that requires code changes.
 - `queue_required` is a routing result, not a bypass. It may accompany an
   otherwise eligible assessment only when the configured queue path is
   supported; otherwise the result is `unsupported_merge_policy`.
@@ -514,18 +624,26 @@ The live path must implement the following ordering:
 1. parse and schema-validate the agent result;
 2. reject any result other than `eligible`;
 3. acquire the forge/repository/pull-request lease;
-4. re-fetch the pull request and confirm it is open and not draft;
-5. confirm the current head equals the reviewed and evaluated head;
+4. re-fetch the pull request and confirm it is open, not draft, and native
+   auto-merge is not enabled;
+5. confirm the current head equals the reviewed and evaluated head, and confirm
+   the current base branch and base SHA match the Review attestation;
 6. re-load policy and confirm mode, cohort, and fingerprint continuity;
 7. recompute changed-path and protected-path policy;
-8. re-fetch Review, approval, CODEOWNERS, and trusted human-veto state;
+8. re-fetch Review, approval, CODEOWNERS, and human-intent signals;
 9. re-fetch required checks and prove they apply to the current head, unless
    the configured merge queue explicitly owns their pending transition;
 10. resolve mergeability, rulesets, allowed method, and required queue path;
 11. check whether the same head is already queued or merged;
 12. create the final authorization snapshot and idempotency key;
-13. issue at most one expected-head-bound merge or queue request; and
-14. record the typed result and receipt, then release the lease.
+13. persist a durable pending receipt containing the authorization snapshot,
+    request identity, and idempotency key before calling the forge;
+14. re-check kill-switch, mode, and policy fingerprint; abort if any changed
+    since step 6 (an abort updates the pending receipt with the corresponding
+    reason code and releases the lease; no forge request is issued);
+15. issue at most one expected-head-bound merge or queue request; and
+16. update the pending receipt with the typed result and completion status,
+    then release the lease.
 
 Steps may be combined into atomic forge operations when available, but none may
 be omitted. A changed value causes a safe terminal or waiting outcome; it does
@@ -557,12 +675,16 @@ unless an explicit policy and evidence review approves it.
 
 ### Retries
 
-Retries are permitted only for classified transient API failures. They are
-bounded, reuse the idempotency key, inspect current forge state before another
-mutation request, and repeat final revalidation. A timeout after submission is
-an unknown result to reconcile, not proof that the request failed. Policy
-denials, permission denials, unknown mergeability, stale heads, and malformed
-agent output are not blindly retried.
+Retries are permitted only when the prior transmission is proven not to have
+reached the forge, or when the forge operation atomically enforces the same
+idempotency key. They are bounded, reuse the idempotency key, inspect current
+forge state before another mutation request, and repeat final revalidation. A
+timeout after submission is an unknown result; the run must reconcile against
+current forge state (checking whether the merge or enqueue actually occurred)
+rather than issuing another request. If the outcome remains unknown after
+reconciliation, the pending receipt records the ambiguity for operator
+resolution. Policy denials, permission denials, unknown mergeability, stale
+heads, and malformed agent output are not retried.
 
 ## Security and abuse cases
 
@@ -574,12 +696,27 @@ The implementation must include adversarial tests for these cases:
 - a PR changes Auto-Merge policy, prompts, harnesses, hooks, workflows,
   CODEOWNERS, rulesets, mint roles, or capability code;
 - the head changes after assessment but before the forge call;
+- the PR is retargeted (base branch changed) while the head stays the same;
+- the pull-request payload reports a stale base SHA while the PR shows as
+  mergeable (the live base branch must be verified independently, and the
+  merge preview's parent tuple must be `[live_base_sha, head_sha]`);
+- a human enables GitHub's native "merge when ready" during or after the
+  agent's evaluation (the postflight must detect this and refuse mutation;
+  Fullsend must not race with native auto-merge to merge the same PR);
+- a human directly merges the PR while the agent is mid-evaluation or between
+  postflight and the forge call;
+- a kill-switch or mode change arrives between final revalidation and the
+  forge call;
 - branch rules or policy change while a run is in flight;
 - mergeability remains unknown after API retries;
-- two events or runners evaluate the same pull request concurrently;
+- two triggers fire within seconds for the same PR (e.g., review approval
+  then CI completion), and event coalescing must prevent concurrent
+  evaluations;
 - a fork or crafted payload names an unexpected repository or branch;
 - model output contains an arbitrary command, target, method, or override;
-- a process attempts to use an expired or wrong-target capability; and
+- a process attempts to use an expired or wrong-target capability;
+- the host crashes after the forge accepts a request but before the receipt
+  is finalized; and
 - credentials appear in model context, sandbox environment, logs, artifacts,
   traces, or receipts.
 
@@ -633,11 +770,17 @@ Before `automatic` mode is available, the implementation must prove:
 
 - schema validation rejects missing, stale, unknown, and authority-bearing
   fields;
+- every policy gate accumulates failures rather than short-circuiting, so
+  receipts capture all ineligibility reasons, not just the first;
+- evidence integrity hashes are computed and verified across trust zones;
 - every policy veto maps to a stable reason code;
-- current-head equality and policy-fingerprint equality are mandatory;
+- current-head equality, current-base equality, and policy-fingerprint equality
+  are mandatory;
 - observe and live paths share authorization logic;
 - staged execution has no access to a write-capable credential;
-- receipt construction is complete and secret-safe; and
+- receipt construction is complete and secret-safe;
+- write-ahead pending receipt is persisted before the forge request and
+  reconciled on crash recovery; and
 - already-queued, already-merged, duplicate-event, and concurrent-run behavior
   is idempotent.
 
@@ -650,6 +793,14 @@ Before `automatic` mode is available, the implementation must prove:
   mutation;
 - disabling Auto-Merge during a run prevents mutation;
 - closing or manually merging during a run produces a safe no-op;
+- retargeting the PR (changing base branch) after Review invalidates the
+  attestation and requires fresh Review;
+- the base branch advances while the PR head stays the same, producing a stale
+  base SHA in the pull-request payload that the live-base verification catches;
+- a kill-switch or mode change arriving between final revalidation and forge
+  request prevents mutation;
+- a host crash after the forge accepts a request produces a pending receipt
+  that startup reconciliation completes;
 - duplicate delivery results in at most one forge request; and
 - queue completion or removal updates the original receipt.
 
@@ -661,6 +812,8 @@ Before `automatic` mode is available, the implementation must prove:
 - squash-only, merge-only, rebase-only, and unsupported merge policies;
 - protected default branch with and without a required queue;
 - direct merge with expected-head conditionality;
+- live base-branch verification catches a stale base SHA in the pull-request
+  payload, and merge-preview parent verification catches stale synthetic merges;
 - ruleset, policy, base, and head changes during evaluation;
 - protected-path changes and unauthorized signal manipulation; and
 - bounded retries for transient GitHub failures.
@@ -735,9 +888,9 @@ first mutation-capable release:
 - Is there exactly one Fullsend-owned autonomous-merge path?
 - Can the evaluator run with no merge-capable credential?
 - Can a model output ever directly select or invoke a mutation? It must not.
-- Is every merge/queue request bound to the reviewed current head?
-- Does the final gate re-fetch policy, human signals, reviews, checks, paths,
-  rulesets, mode, and mergeability?
+- Is every merge/queue request bound to the reviewed current head, base branch, and base SHA?
+- Does the final gate re-fetch policy, human-intent signals, reviews, checks, paths,
+  rulesets, mode, mergeability, head, and base branch/SHA?
 - Does unknown state fail closed?
 - Can branch protection or queue requirements ever be bypassed? They must not.
 - Do duplicate events and concurrent runs permit at most one request?

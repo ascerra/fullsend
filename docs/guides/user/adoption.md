@@ -146,26 +146,36 @@ See [bugfix workflow](bugfix-workflow.md) for the full agent-driven flow from is
 
 ### Dedicated Auto-Merge
 
-Autonomous merging is being moved to a dedicated, opt-in `auto-merge` stage
-([ADR 0110](../../ADRs/0110-dedicated-auto-merge-authority-boundary.md)). The
-Code agent creates and updates PRs; it does not autonomously merge them. The
-legacy `CODE_AUTO_MERGE` and `CODE_AUTO_MERGE_METHOD` variables are being
+> **Planned:** The dedicated Auto-Merge stage is not yet available. The
+> architecture is decided ([ADR 0110](../../ADRs/0110-dedicated-auto-merge-authority-boundary.md))
+> and the implementation contract is defined
+> ([Auto-Merge Contract v1](../../normative/auto-merge/v1/)), but no runtime
+> behavior exists yet. Track progress in
+> [agents#1132](https://github.com/fullsend-ai/agents/issues/1132).
+
+The Code agent creates and updates PRs; it does not autonomously merge them.
+The legacy `CODE_AUTO_MERGE` and `CODE_AUTO_MERGE_METHOD` variables are being
 removed ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)) and
 must not be used as an enablement mechanism.
 
-The dedicated stage consumes structured Review evidence, then a host-side forge
-driver revalidates the current head SHA, policy, required checks, human intent,
-and merge or queue path before requesting the normal forge operation. Start in
-observe-only or explicitly human-triggered mode, and graduate only allowlisted
-low-risk cohorts with dated evidence. The Review agent's
-[risk assessment](../../ADRs/0089-pr-risk-assessment-scoring.md) informs cohort
-eligibility; a `risk_too_high` finding prevents autonomous merge. See the
-[autonomy spectrum](../../problems/autonomy-spectrum.md) for the remaining
-graduation questions.
+When the dedicated stage ships, it will be opt-in per repository, disabled by
+default, and subject to a host-side authorization gate that revalidates policy,
+checks, reviews, human-intent signals, head SHA, base branch, and base SHA before requesting the normal
+merge or queue path. The model is advisory — it evaluates semantic eligibility
+but never holds a merge-capable credential. Every decision is bound to one exact
+revision tuple and recorded in a write-ahead receipt before mutation. The
+authority boundary and fail-closed behavior have been validated in a private
+integration lab with 27 adversarial test cases.
+
+See the [Auto-Merge Contract v1](../../normative/auto-merge/v1/) for the full
+authority boundary, invariants, and rollout plan. The Review agent's
+[risk assessment](../../ADRs/0089-pr-risk-assessment-scoring.md) will inform
+cohort eligibility. See the [autonomy spectrum](../../problems/autonomy-spectrum.md)
+for the remaining graduation questions.
 
 Forge-native or third-party automation, such as Renovate / Dependabot, is a
 separate integration and must be governed by its own policy; it is not a second
-Fullsend Code-agent enablement path.
+Fullsend-owned autonomous-merge path.
 
 ### Bring Your Own Agents
 
