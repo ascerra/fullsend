@@ -223,8 +223,10 @@ The filter must fetch the live base-branch SHA directly from the branch, not
 trust only the base SHA embedded in the pull-request payload. Lab testing
 revealed that GitHub's pull-request payload and synthetic merge preview can
 remain based on an older base revision even while the UI describes the PR as
-clean. When a merge preview is available, the filter must verify that its ordered
-parent tuple is exactly `[live_base_sha, head_sha]`.
+clean. The filter must verify that the merge preview's ordered parent tuple is
+exactly `[live_base_sha, head_sha]`. If the merge preview is unavailable or
+returns an error, the filter must treat the base-SHA verification as failed
+(unknown never passes).
 
 The implementation should accumulate all failing conditions into the result
 rather than short-circuiting on the first failure. This ensures receipts and
@@ -276,8 +278,10 @@ Repository policy selects exactly one mode.
   and hypothetical forge path, but provide no merge-capable credential and make
   no GitHub mutation.
 - **`explicit`** — evaluate only after a trusted human explicitly requests
-  Auto-Merge. The request is a trigger, not an override; every normal gate still
-  applies.
+  Auto-Merge for the current binding tuple. The request is a trigger, not an
+  override; every normal gate still applies. The trigger is latched to the
+  tuple on which it was issued: a new head, base, or policy fingerprint
+  requires a fresh human request.
 - **`automatic`** — evaluate eligible event transitions automatically for an
   explicitly allowlisted repository and cohort. This mode is prohibited until
   the rollout criteria in this document are met.
@@ -319,8 +323,9 @@ rather than being duplicated across trigger implementations.
    pending evaluation survives per key.
 3. **Load policy.** Resolve global, installation, repository, cohort, and PR
    controls and record a policy fingerprint.
-4. **Run the candidate filter.** Reject disabled, closed, draft, unsupported,
-   protected, held, stale, failed, or out-of-cohort candidates deterministically.
+4. **Run the candidate filter.** Reject disabled, closed, draft, fork or
+   cross-repository, unsupported, protected, held, stale, failed, or
+   out-of-cohort candidates deterministically.
 5. **Build `AutoMergeContext`.** Fetch and timestamp the current evidence. Each
    gate records its authoritative source and known/unknown state.
 6. **Evaluate.** Run the sandboxed agent only when deterministic policy allows
@@ -622,7 +627,10 @@ may evolve without changing their meaning.
 The live path must implement the following ordering:
 
 1. parse and schema-validate the agent result;
-2. reject any result other than `eligible`;
+2. reject any result other than `eligible`; also reject an `eligible` result
+   that carries a risk classification above the cohort threshold, a
+   recommended forge path of `none` or `unknown`, or explicit uncertainties
+   that the host policy classifies as blocking;
 3. acquire the forge/repository/pull-request lease;
 4. re-fetch the pull request and confirm it is open, not draft, and native
    auto-merge is not enabled;
@@ -631,15 +639,17 @@ The live path must implement the following ordering:
 6. re-load policy and confirm mode, cohort, and fingerprint continuity;
 7. recompute changed-path and protected-path policy;
 8. re-fetch Review, approval, CODEOWNERS, and human-intent signals;
-9. re-fetch required checks and prove they apply to the current head, unless
-   the configured merge queue explicitly owns their pending transition;
-10. resolve mergeability, rulesets, allowed method, and required queue path;
+9. resolve mergeability, rulesets, allowed method, and required queue path;
+10. re-fetch required checks and prove they apply to the current head; pending
+    checks are a waiting outcome unless the resolved queue path (step 9)
+    explicitly owns their completion;
 11. check whether the same head is already queued or merged;
 12. create the final authorization snapshot and idempotency key;
 13. persist a durable pending receipt containing the authorization snapshot,
     request identity, and idempotency key before calling the forge;
-14. re-check kill-switch, mode, and policy fingerprint; abort if any changed
-    since step 6 (an abort updates the pending receipt with the corresponding
+14. re-check kill-switch, mode, policy fingerprint, native auto-merge status,
+    head SHA, base SHA, and human-intent signals; abort if any changed since
+    steps 4-8 (an abort updates the pending receipt with the corresponding
     reason code and releases the lease; no forge request is issued);
 15. issue at most one expected-head-bound merge or queue request; and
 16. update the pending receipt with the typed result and completion status,
@@ -662,9 +672,17 @@ direct merge path.
 
 When the target branch requires a merge queue, the driver must use it. Pending
 checks may be accepted only when current repository policy explicitly delegates
-their completion and head revalidation to that queue. Enqueue success is not
-reported as merged; the receipt records `queued`, and a later forge event
-records the terminal merge or removal outcome.
+their completion to that queue. Enqueue success is not reported as merged; the
+receipt records `queued`, and a later forge event records the terminal merge or
+removal outcome.
+
+The merge queue may rebase or update the PR head after enqueue. Because
+enqueue is not a compare-and-swap operation on head SHA, the reviewed head
+may differ from the head that actually merges. The binding tuple therefore
+records the head that was reviewed and enqueued, not the head that the queue
+eventually merges; the receipt must capture both. If the queue removes the PR
+(conflict, check failure, or human action), the receipt records `no_op` with
+the forge-reported reason.
 
 ### Protected default branches
 
