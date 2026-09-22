@@ -378,38 +378,20 @@ the repo's CODEOWNERS and review process
 
 - Autonomous merge is a separate `auto-merge` stage, opt-in per repository and
   disabled by default. The model is advisory: it evaluates semantic eligibility
-  but never holds a merge-capable credential or authorizes mutation. A host-side
-  forge driver re-fetches current policy, review, check, human-intent signal, head-SHA,
-  base branch, and base-SHA state before requesting an expected-head direct
-  merge; it never uses an administrator bypass. Repositories that require a
-  merge queue fail closed in v1.
-- Every decision is bound to an immutable tuple `(forge_instance,
-  repository_id, pull_request_number, head_sha, base_ref, base_sha,
-  policy_fingerprint)` and
-  recorded in a write-ahead receipt before mutation. The authority boundary and
-  binding-tuple verification chain have been validated in a private integration
-  lab with 41 controller and dispatch test cases and a hosted exact-head merge; remaining
-  work is production hardening (constrained merge broker and dedicated
-  identity, fenced per-PR lease, authenticated idempotent receipt store,
-  reliable trigger reconciliation, and strict branch-protection validation)
-  ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md);
-  [Auto-Merge Contract v1](normative/auto-merge/v1/)).
-- The dedicated stage is the sole Fullsend-owned autonomous-merge path. The
-  legacy Code-agent `CODE_AUTO_MERGE*` environment variables and post-script
-  implementation will be removed rather than retained as a compatibility
-  fallback ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)).
-- The model sandbox has no merge-capable credential. The driver uses a
-  short-lived repository-scoped credential behind a constrained host-side
-  broker bound to the expected head. Because GitHub requires `Contents: write`,
-  the broker contains residual token capability rather than exposing it, while
-  repository branch protection and rulesets remain the final enforcement
-  boundary. A required merge queue is an unsupported policy in v1, not a bypass.
+  but never holds a merge-capable credential or authorizes mutation. Trusted
+  host code revalidates current forge state and controls direct or queue
+  execution without administrator bypass
+  ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md)).
+- The dedicated stage is the sole Fullsend-owned autonomous-merge path; the
+  legacy Code-agent `CODE_AUTO_MERGE*` path will be retired rather than kept as
+  a compatibility fallback
+  ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)).
 
 **Open questions:**
 
 - How is policy versioned, and how do we ensure agents run under the correct policy version?
 - Who can change policy, and what approval process governs policy changes? (See [governance.md](problems/governance.md).)
-- ~~How does policy interact with the autonomy spectrum — is the auto-merge vs. escalate decision a policy setting?~~ Partially decided in [ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md): it is an opt-in policy-controlled stage with host-side final authorization. Cohort definitions and graduation evidence remain open; see [autonomy-spectrum.md](problems/autonomy-spectrum.md).
+- ~~How does policy interact with the autonomy spectrum — is the auto-merge vs. escalate decision a policy setting?~~ The dedicated stage is opt-in and policy-controlled per [ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md); cohort definitions and graduation evidence remain open in [autonomy-spectrum.md](problems/autonomy-spectrum.md).
 
 ## Intent Source
 

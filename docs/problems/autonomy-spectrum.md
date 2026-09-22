@@ -6,13 +6,8 @@ When should agents auto-merge, and when should they escalate to humans?
 
 > **Note:** [ADR 0110](../ADRs/0110-dedicated-auto-merge-authority-boundary.md)
 > decides the merge mechanism: a dedicated `auto-merge` stage with a host-side
-> authorization gate, not a Code or Review agent merge. The authority boundary,
-> binding-tuple verification, and fail-closed behavior have been validated in a
-> private integration lab with 41 controller and dispatch test cases and a hosted exact-head
-> merge. The binary per-repo
-> model below predates that decision. The graduation criteria, cohort
-> definitions, and open questions in this document remain active; the merge
-> authority model is superseded.
+> authorization gate, not a Code or Review agent merge. The graduation and
+> cohort questions in this document remain open.
 
 The autonomy model is **binary per-repo** with **CODEOWNERS as the escape hatch**:
 
@@ -105,16 +100,10 @@ This addresses the gap where the binary model can miss risky changes that don't 
 
 ## Open questions
 
-> **Partially addressed by [ADR 0110](../ADRs/0110-dedicated-auto-merge-authority-boundary.md):**
-> Revocation is addressed by the kill-switch and mode controls (disable per PR,
-> cohort, repository, or globally). Sub-repo autonomy is addressed by
-> protected-path policy and cohort allowlists. The remaining questions below
-> are still open.
-
 - Who decides when a repo is ready for autonomy? (See [governance.md](governance.md))
-- Can autonomy be revoked? Under what circumstances? Automatically if a bad merge is detected? (Kill switches and mode changes are defined in [ADR 0110](../ADRs/0110-dedicated-auto-merge-authority-boundary.md); graduation evidence and automatic revocation triggers remain open.)
+- Can autonomy be revoked? Under what circumstances? Automatically if a bad merge is detected?
 - How do we handle repos with poor test coverage today? Do agents help improve coverage as a prerequisite to their own autonomy?
-- ~~Is per-repo binary too coarse? Should there be sub-repo zones of autonomy beyond what CODEOWNERS provides?~~ Partially decided in [ADR 0110](../ADRs/0110-dedicated-auto-merge-authority-boundary.md): the dedicated stage uses cohort allowlists and protected-path policy for sub-repo granularity. Cohort definitions and path-class taxonomy remain open.
+- Is per-repo binary too coarse? Should there be sub-repo zones of autonomy beyond what CODEOWNERS provides?
 - What about cross-repo changes? If a change spans an autonomous repo and a non-autonomous one, which rules apply?
 - How do we handle the CODEOWNERS bootstrap — who decides the initial set of guarded paths?
 - Should graduation criteria include human factors — not just "can agents be trusted here?" but "can the humans responsible for guarded paths remain effective once they stop implementing?" (See [human-factors.md](human-factors.md))
