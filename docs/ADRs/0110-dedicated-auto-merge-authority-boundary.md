@@ -21,12 +21,12 @@ Accepted
 ## Decision summary
 
 Fullsend will provide one way to merge pull requests automatically: a dedicated
-Auto-Merge stage, separate from Code and Review. The agent recommends whether a
-pull request is ready. The trusted Fullsend runtime—code outside the agent
+Auto-Merge stage, separate from Code and Review. The stage combines an
+Auto-Merge agent with trusted Fullsend runtime code. The agent recommends
+whether a pull request is ready. The trusted runtime—code outside the agent
 sandbox that holds the GitHub credentials—then checks the latest GitHub state.
 If the change is still allowed, that runtime sends it through the repository's
-required merge queue or direct-merge path. The legacy `CODE_AUTO_MERGE` path
-will be removed.
+configured merge path. The legacy `CODE_AUTO_MERGE` path will be removed.
 
 ## Context
 
@@ -74,27 +74,30 @@ implemented
 ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)); they will not
 remain as a compatibility path.
 
-The first implementation may use a dedicated agent with a trusted post-script.
-This ADR does not require a post-script specifically. It requires the
-final policy checks and any credentialed GitHub action to remain in trusted
-Fullsend runtime code outside the agent sandbox.
-
 ## Required properties
 
 - Automatic triggers, such as reviews and CI becoming ready, and manual commands
   must enter the same Auto-Merge stage.
 - Deterministic policy checks must pass, and the agent's assessment must
   recommend merging. The agent's recommendation alone is not enough.
+- Auto-Merge must read the PR-level risk assessment produced by Review for the
+  exact revision being evaluated
+  ([ADR 0089](0089-pr-risk-assessment-scoring.md)). The assessment is a policy
+  input, not authorization by itself. It remains informational unless repository
+  policy explicitly makes it a gate. When risk gating is enabled, a missing,
+  stale, or malformed assessment—or a risk score above the allowed threshold—
+  must stop automatic merging and escalate to a human.
 - Every assessment and authorization must identify the repository, pull request,
   target branch, exact revision, and policy that were evaluated.
 - Immediately before taking action, the trusted Fullsend runtime must fetch the
   latest GitHub state again. It must stop if required checks or reviews no longer
   pass, a human has blocked the change, or any required state is stale or
   unknown.
-- The runtime must use the repository's configured merge path. It must enter a
-  required merge queue rather than merging directly. Before GitHub merges a
-  queue-generated revision, the runtime must repeat the authorization checks
-  against that exact revision.
+- The runtime must use the repository's configured merge path. If the repository
+  requires a merge queue, the runtime must enter that queue and must not merge
+  directly. Direct merge is allowed only when repository policy permits it.
+  Before GitHub merges a queue-generated revision, the runtime must repeat the
+  authorization checks against that exact revision.
 - The agent never receives merge credentials. A dedicated least-privilege
   identity performs the final GitHub action, and administrator bypass is not
   allowed.
