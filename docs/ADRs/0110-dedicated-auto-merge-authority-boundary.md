@@ -61,16 +61,20 @@ Fullsend's authorization checks.
    multiple ways to enable automatic merging.
 2. Give the model a merge-capable credential — **Rejected** because untrusted
    pull request content or compromised model output could use it to merge.
-3. Use a dedicated Auto-Merge stage with final merge control in the trusted
-   Fullsend runtime — **Selected** to separate the agent's recommendation from
-   the final checks and GitHub action.
+3. Use a dedicated Auto-Merge agent within its own stage, while trusted Fullsend
+   runtime code retains final merge control — **Selected** to separate the
+   agent's recommendation from the final checks and GitHub action.
 
-## Decision: dedicated Auto-Merge stage
+## Decision: dedicated Auto-Merge agent and stage
 
-We choose Option 3. The dedicated `auto-merge` stage is opt-in per repository
-and disabled by default. The legacy Code post-script path and its
-`CODE_AUTO_MERGE*` settings will be retired as the dedicated stage is
-implemented
+We choose Option 3. Fullsend will provide a dedicated Auto-Merge agent as the
+advisory component of a new `auto-merge` stage. The agent assesses whether a
+pull request is ready, while trusted Fullsend runtime code performs the final
+checks and GitHub action.
+
+The stage is opt-in per repository and disabled by default. The legacy Code
+post-script path and its `CODE_AUTO_MERGE*` settings will be retired as the
+dedicated stage is implemented
 ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)); they will not
 remain as a compatibility path.
 
