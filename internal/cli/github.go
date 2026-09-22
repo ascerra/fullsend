@@ -20,6 +20,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/layers"
 	"github.com/fullsend-ai/fullsend/internal/maputil"
 	"github.com/fullsend-ai/fullsend/internal/mintcore"
+	"github.com/fullsend-ai/fullsend/internal/preset"
 	"github.com/fullsend-ai/fullsend/internal/repos"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 	"github.com/fullsend-ai/fullsend/internal/ui"
@@ -238,7 +239,7 @@ func runGitHubSetupPerRepo(ctx context.Context, client forge.Client, printer *ui
 	printer.Header("Setting up per-repo fullsend for " + cfg.target)
 	printer.Blank()
 
-	presetData, err := fetchAndValidatePreset(cfg, printer)
+	presetData, err := fetchAndValidatePreset(ctx, cfg, printer)
 	if err != nil {
 		return err
 	}
@@ -381,15 +382,16 @@ func runGitHubSetupPerRepo(ctx context.Context, client forge.Client, printer *ui
 		})
 	}
 	if presetData != nil {
+		plan := preset.Apply(presetData, nil, nil)
 		files = append(files, forge.TreeFile{
-			Path:    ".fullsend/config.base.yaml",
-			Content: presetData,
+			Path:    preset.BasePath,
+			Content: plan.Base,
 			Mode:    "100644",
 		})
 	}
 	if cfgYAML != nil {
 		files = append(files, forge.TreeFile{
-			Path:    ".fullsend/config.yaml",
+			Path:    preset.OverlayPath,
 			Content: cfgYAML,
 			Mode:    "100644",
 		})
@@ -627,12 +629,12 @@ func buildPresetOverlay(cfg githubSetupConfig, roles []string) config.PerRepoCon
 // fetchAndValidatePreset loads the --config preset, verifies hash and
 // YAML, then parses and validates it as a per-repo config layer.
 // Returns nil data when --config was not set.
-func fetchAndValidatePreset(cfg githubSetupConfig, printer *ui.Printer) ([]byte, error) {
+func fetchAndValidatePreset(ctx context.Context, cfg githubSetupConfig, printer *ui.Printer) ([]byte, error) {
 	if cfg.configPreset == "" {
 		return nil, nil
 	}
 	printer.StepStart("Fetching preset from " + cfg.configPreset)
-	presetData, fetchErr := fetchPreset(cfg.configPreset)
+	presetData, fetchErr := preset.Fetch(ctx, cfg.configPreset)
 	if fetchErr != nil {
 		printer.StepFail("Failed to fetch preset")
 		return nil, fetchErr
@@ -641,16 +643,16 @@ func fetchAndValidatePreset(cfg githubSetupConfig, printer *ui.Printer) ([]byte,
 
 	if cfg.configHash != "" {
 		printer.StepStart("Validating preset hash")
-		if hashErr := validatePresetHash(presetData, cfg.configHash); hashErr != nil {
+		if hashErr := preset.ValidateHash(presetData, cfg.configHash); hashErr != nil {
 			printer.StepFail("Preset hash validation failed")
 			return nil, hashErr
 		}
 		printer.StepDone("Preset hash validated")
-	} else if isRemotePreset(cfg.configPreset) {
+	} else if preset.IsRemote(cfg.configPreset) {
 		printer.StepWarn("Remote preset fetched without --config-hash; content integrity is not verified")
 	}
 
-	if yamlErr := validatePresetYAML(presetData); yamlErr != nil {
+	if yamlErr := preset.ValidateYAML(presetData); yamlErr != nil {
 		printer.StepFail("Preset YAML validation failed")
 		return nil, yamlErr
 	}
@@ -1154,6 +1156,7 @@ var configKeyMapping = map[string]configKeyInfo{
 	forge.PerRepoGuardVar:       {storage: storageVariable},
 	"FULLSEND_GCP_PROJECT_ID":   {storage: storageSecret},
 	"FULLSEND_GCP_WIF_PROVIDER": {storage: storageSecret},
+	openAIRepoSecretName:        {storage: storageSecret},
 }
 
 func newGitHubSetCmd() *cobra.Command {
@@ -1172,7 +1175,8 @@ Valid keys:
   FULLSEND_REVIEW_CLIENT_ID   repo variable   review app OAuth client ID
   FULLSEND_PER_REPO_INSTALL   repo variable   per-repo install marker
   FULLSEND_GCP_PROJECT_ID     repo secret     GCP project for inference
-  FULLSEND_GCP_WIF_PROVIDER   repo secret     WIF provider resource name`,
+  FULLSEND_GCP_WIF_PROVIDER   repo secret     WIF provider resource name
+  FULLSEND_OPENAI_API_KEY     repo secret     opt-in OpenAI API key when WIF is unset`,
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
@@ -1204,6 +1208,10 @@ func runGitHubSet(ctx context.Context, client forge.Client, printer *ui.Printer,
 		}
 		sort.Strings(validKeys)
 		return fmt.Errorf("unknown config key %q; valid keys: %s", key, strings.Join(validKeys, ", "))
+	}
+
+	if key == openAIRepoSecretName && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("value for %s must not be empty", key)
 	}
 
 	owner, repo, isRepo := parseTarget(target)

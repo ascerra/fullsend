@@ -57,7 +57,7 @@ the dedicated org-level `<org>/.fullsend` config repo is deprecated
 - Event-driven stage dispatch: eliminate `workflow_dispatch` + `gh workflow run` fan-out from `dispatch.yml` in favor of synchronous `workflow_call` so the dispatched run stays linked to the caller ([ADR 0041](ADRs/0041-synchronous-workflow-call-event-dispatch.md)).
 - Multi-repo management: a `fullsend repos` subcommand group with a declarative `repos.yaml` manifest for managing per-repo installations at scale — install, convergence (provision, sync, upgrade), status, and uninstall across repos and orgs ([ADR 0057](ADRs/0057-repos-management.md), [ADR 0074](ADRs/0074-repos-command-consolidation.md)).
 - Dispatch version-skew resolution: per-repo `reusable-dispatch.yml` inlines stage workflow jobs directly, eliminating `@v0` references to `reusable-{stage}.yml` ([ADR 0062](ADRs/0062-dispatch-version-skew.md)).
-- Ready-made configuration presets: `fullsend github setup --config <path-or-url>` commits the preset unchanged as `.fullsend/config.base.yaml` and writes any explicitly-passed persistent setup flags (`--runtime`, `--agents`, `--mint-url`, `--inference-*`) into `.fullsend/config.yaml`, overriding matching preset values; a stub overlay is written only when no persistent flags are passed. Shared-infrastructure presets will reduce per-adopter enrollment (target state): mint via `job_workflow_ref` trust per [ADR 0059](ADRs/0059-public-mint-mode-with-wildcard-allowlists.md); inference authorization model undecided ([ADR 0069](ADRs/0069-ready-made-configuration-presets.md)); enrollment remains required until follow-on ADRs land.
+- Ready-made configuration presets: `fullsend github setup --config <path-or-url>` commits the preset unchanged as `.fullsend/config.base.yaml` and writes any explicitly-passed persistent setup flags (`--runtime`, `--agents`, `--mint-url`, `--inference-*`) into `.fullsend/config.yaml`, overriding matching preset values; a stub overlay is written only when no persistent flags are passed. `fullsend repos install` converges the same preset through `defaults.config_base` / per-repo `config_base` in `repos.yaml` (optional `sha256`, `none` to disable inheritance), replacing `.fullsend/config.base.yaml` wholesale while preserving the overlay. Shared-infrastructure presets will reduce per-adopter enrollment (target state): mint via `job_workflow_ref` trust per [ADR 0059](ADRs/0059-public-mint-mode-with-wildcard-allowlists.md); inference authorization model undecided ([ADR 0069](ADRs/0069-ready-made-configuration-presets.md)); enrollment remains required until follow-on ADRs land.
 - GitLab event dispatch: cron-based polling for all events (issues/comments/labels, MR-open review, MR-merge retro, and closed-unmerged retro). Native `merge_request_event` dispatch was removed ([#7322](https://github.com/fullsend-ai/fullsend/issues/7322)); protected CI/CD variables are unavailable on unprotected MR refs. No external infrastructure (no webhook bridge). Bot PAT is Developer-level and stored as a protected CI/CD variable; poller state lives on dedicated HMAC-signed branches. Per-repo only ([ADR 0067](ADRs/0067-gitlab-cron-polling-event-dispatch.md)).
 
 **Open questions:**
@@ -272,7 +272,7 @@ One concrete implementation option is [`oidcx`](https://github.com/oxidecomputer
 - ~~What identity model fits best — separate bot accounts per agent role, a single bot account with role metadata, GitHub App installations, or something else?~~ Decided in [ADR 0007](ADRs/0007-per-role-github-apps.md).
 - How are credentials rotated and revoked, and who has authority to do that?
 - Does the identity provider integrate with existing secrets management, or is it a new system?
-- How will per-role identity work on GitLab and Forgejo, which lack GitHub's app manifest flow? GitLab uses a Developer-level bot PAT stored as a protected CI/CD variable; poller state lives on dedicated HMAC-signed branches rather than Maintainer-only CI/CD variables — see [ADR 0067](ADRs/0067-gitlab-cron-polling-event-dispatch.md).
+- How will per-role identity work on GitLab and Forgejo, which lack GitHub's app manifest flow? GitLab uses a Developer-level bot PAT stored as a protected CI/CD variable; poller state lives on dedicated HMAC-signed branches rather than Maintainer-only CI/CD variables — see [ADR 0067](ADRs/0067-gitlab-cron-polling-event-dispatch.md). The registered-role credential contract (built-in Poller/Analyst/Coder plus administrator-registered custom roles) is specified in [gitlab-role-credentials.md](contributing/gitlab-role-credentials.md); job routing (#7499) has landed for `fullsend poll`, `fullsend run`, and `fullsend post-review`, selecting the registered role credential when the migration gate is `migrating` or `enforced` and keeping the shared `FULLSEND_FORGE_TOKEN` path as the default while the gate is unset, `disabled`, or `rollback`.
 - Which agent roles need Discussions (or other chat) write scopes, and how do those scopes map onto named mint privilege levels? Conversation participation requires least-privilege identity deltas per [ADR 0086](ADRs/0086-conversation-surface-for-agent-participation.md).
 
 ## Agent Dispatch and Coordination Layer
@@ -379,15 +379,18 @@ the repo's CODEOWNERS and review process
   disabled by default. The model is advisory: it evaluates semantic eligibility
   but never holds a merge-capable credential or authorizes mutation. A host-side
   forge driver re-fetches current policy, review, check, human-intent signal, head-SHA,
-  base branch, and base-SHA state before requesting the normal merge or queue
-  mechanism; it never uses an administrator bypass.
-- Every decision is bound to an immutable tuple `(repository,
-  pull_request_number, head_sha, base_ref, base_sha, policy_fingerprint)` and
+  base branch, and base-SHA state before requesting an expected-head direct
+  merge; it never uses an administrator bypass. Repositories that require a
+  merge queue fail closed in v1.
+- Every decision is bound to an immutable tuple `(forge_instance,
+  repository_id, pull_request_number, head_sha, base_ref, base_sha,
+  policy_fingerprint)` and
   recorded in a write-ahead receipt before mutation. The authority boundary and
   binding-tuple verification chain have been validated in a private integration
-  lab with 27 adversarial test cases; remaining work is production hardening
-  (purpose-built merge identity, per-PR lease, idempotent receipt store, branch
-  protection validation)
+  lab with 41 controller and dispatch test cases and a hosted exact-head merge; remaining
+  work is production hardening (constrained merge broker and dedicated
+  identity, fenced per-PR lease, authenticated idempotent receipt store,
+  reliable trigger reconciliation, and strict branch-protection validation)
   ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md);
   [Auto-Merge Contract v1](normative/auto-merge/v1/)).
 - The dedicated stage is the sole Fullsend-owned autonomous-merge path. The
@@ -395,8 +398,11 @@ the repo's CODEOWNERS and review process
   implementation will be removed rather than retained as a compatibility
   fallback ([agents#1219](https://github.com/fullsend-ai/agents/pull/1219)).
 - The model sandbox has no merge-capable credential. The driver uses a
-  constrained host-side capability bound to the expected head, while repository
-  branch protection and merge queues remain the final enforcement boundary.
+  short-lived repository-scoped credential behind a constrained host-side
+  broker bound to the expected head. Because GitHub requires `Contents: write`,
+  the broker contains residual token capability rather than exposing it, while
+  repository branch protection and rulesets remain the final enforcement
+  boundary. A required merge queue is an unsupported policy in v1, not a bypass.
 
 **Open questions:**
 

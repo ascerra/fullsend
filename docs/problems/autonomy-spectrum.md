@@ -8,7 +8,8 @@ When should agents auto-merge, and when should they escalate to humans?
 > decides the merge mechanism: a dedicated `auto-merge` stage with a host-side
 > authorization gate, not a Code or Review agent merge. The authority boundary,
 > binding-tuple verification, and fail-closed behavior have been validated in a
-> private integration lab with 27 adversarial test cases. The binary per-repo
+> private integration lab with 41 controller and dispatch test cases and a hosted exact-head
+> merge. The binary per-repo
 > model below predates that decision. The graduation criteria, cohort
 > definitions, and open questions in this document remain active; the merge
 > authority model is superseded.

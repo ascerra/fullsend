@@ -8,7 +8,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 	"github.com/fullsend-ai/fullsend/internal/poll"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
@@ -1891,6 +1893,8 @@ func gitlabConvergeCfg(repo string) ConvergeConfig {
 func populateGitLabInstalled(fc *forge.FakeClient, owner, repo string) {
 	full := owner + "/" + repo
 	fc.FileContents[full+"/.gitlab/ci/fullsend-dispatch.yml"] = []byte("  ref: v2.5.0\n")
+	trustScript, _ := scaffold.GitLabPerRepoFile(gitlabTrustScriptPath)
+	fc.FileContents[full+"/"+gitlabTrustScriptPath] = trustScript
 	fc.Secrets[full+"/"+forge.SecretGCPProjectID] = true
 	fc.Secrets[full+"/"+forge.SecretGCPWIFProvider] = true
 	fc.Secrets[full+"/"+forge.SecretForgeToken] = true
@@ -1898,6 +1902,29 @@ func populateGitLabInstalled(fc *forge.FakeClient, owner, repo string) {
 		{ID: 1, Description: "fullsend slash poll", Active: true},
 		{ID: 2, Description: "fullsend event poll", Active: true},
 	}
+}
+
+func TestConverge_GitLab_RepairsMissingTrustScript(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	delete(fc.FileContents, "acme/api/"+gitlabTrustScriptPath)
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("unexpected failure: %v", result.Failed()[0].Error)
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, f := range sc.files {
+		if f.Path == gitlabTrustScriptPath {
+			return
+		}
+	}
+	t.Fatalf("convergence did not repair %s; files: %+v", gitlabTrustScriptPath, sc.files)
 }
 
 func TestConverge_GitLab_DoesNotSeedRetiredPollVariables(t *testing.T) {
@@ -3750,6 +3777,7 @@ func gitlabRequiredScaffoldPaths() []string {
 		".gitlab/ci/fullsend-agent.yml",
 		".gitlab/ci/fullsend-dispatch.yml",
 		".gitlab/ci/fullsend-poll.yml",
+		".gitlab/ci/scripts/trust-ci-server-ca.sh",
 		".fullsend/config.yaml",
 		".gitlab-ci.yml",
 	}
@@ -3936,6 +3964,20 @@ func TestConverge_GitLab_NeedsPostInstallFlagsForPartialArtifacts(t *testing.T) 
 		wantPostInstall bool
 	}{
 		{
+			name: "enforced mode with schedules and no shared token",
+			seed: func(fc *forge.FakeClient, full string) {
+				fc.VariableValues[full+"/"+forge.VarGitLabRoleMigration] = " EnFoRcEd "
+				fc.VariablesExist[full+"/"+forge.VarGitLabRoleMigration] = true
+				fc.PipelineSchedules[full] = []forge.PipelineSchedule{
+					{Description: "fullsend slash poll"},
+					{Description: "fullsend event poll"},
+				}
+			},
+			wantBotToken:    false,
+			wantSchedules:   false,
+			wantPostInstall: false,
+		},
+		{
 			name: "bot token present, schedules missing",
 			seed: func(fc *forge.FakeClient, full string) {
 				fc.Secrets[full+"/"+forge.SecretForgeToken] = true
@@ -3999,6 +4041,55 @@ func TestConverge_GitLab_NeedsPostInstallFlagsForPartialArtifacts(t *testing.T) 
 				t.Errorf("NeedsGitLabPostInstall = %v, want %v", got.NeedsGitLabPostInstall, tt.wantPostInstall)
 			}
 		})
+	}
+}
+
+func TestConverge_GitLab_ExistingRepoReportsSharedCredentialRecovery(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	delete(fc.Secrets, "acme/api/"+forge.SecretForgeToken)
+	fc.VariableValues["acme/api/"+forge.VarGitLabRoleMigration] = string(gitlabroles.ModeRollback)
+	fc.VariablesExist["acme/api/"+forge.VarGitLabRoleMigration] = true
+
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), (&spyScaffoldCommit{}).fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("Converge() failed: %v", result.Failed()[0].Error)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("expected one result, got installed=%d converged=%d current=%d", len(result.Installed()), len(result.Converged()), len(result.AlreadyCurrent()))
+	}
+	got := result.Results[0]
+	if !got.NeedsGitLabBotToken || !got.NeedsGitLabPostInstall {
+		t.Fatalf("recovery flags = bot:%v post-install:%v, want both true", got.NeedsGitLabBotToken, got.NeedsGitLabPostInstall)
+	}
+}
+
+func TestConverge_GitLab_ExistingRepoAddsMissingScheduleWithoutDeletingExisting(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{{ID: 41, Description: "fullsend slash poll", Active: true}}
+
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), (&spyScaffoldCommit{}).fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("Converge() failed: %v", result.Failed()[0].Error)
+	}
+	if len(fc.DeletedScheduleIDs) != 0 {
+		t.Fatalf("convergence deleted existing schedules: %v", fc.DeletedScheduleIDs)
+	}
+	var found bool
+	for _, schedule := range fc.PipelineSchedules["acme/api"] {
+		if schedule.ID == 41 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("convergence removed the existing schedule")
 	}
 }
 
@@ -4091,5 +4182,565 @@ func TestGitlabPostInstallDone(t *testing.T) {
 				t.Errorf("gitlabPostInstallDone(%+v) = %v, want %v", tt.components, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGitlabSharedCredentialRequired(t *testing.T) {
+	if !gitlabSharedCredentialRequired("", false) {
+		t.Error("missing migration mode should require the shared credential")
+	}
+	if !gitlabSharedCredentialRequired("migrating", true) {
+		t.Error("migrating mode should require the shared credential")
+	}
+	if gitlabSharedCredentialRequired("enforced", true) {
+		t.Error("enforced mode should not require the shared credential")
+	}
+	if gitlabSharedCredentialRequired(" EnFoRcEd ", true) {
+		t.Error("case- and whitespace-normalized enforced mode should not require the shared credential")
+	}
+	if gitlabSharedCredentialRequired("unknown", true) {
+		t.Error("unknown migration mode must not permit shared credential recreation")
+	}
+}
+
+func TestGitlabRoleCredentialPresent(t *testing.T) {
+	if gitlabRoleCredentialPresent(nil) {
+		t.Fatal("nil components must not report an enrolled role credential")
+	}
+	if !gitlabRoleCredentialPresent([]ComponentStatus{{
+		Name: "secret:" + forge.SecretGitLabPollerToken, Present: true,
+	}}) {
+		t.Fatal("any present built-in role credential must report enrollment")
+	}
+	if gitlabRoleCredentialPresent([]ComponentStatus{{
+		Name: "secret:" + forge.SecretGitLabPollerToken, Present: false,
+	}}) {
+		t.Fatal("an absent role credential must not report enrollment")
+	}
+}
+
+// presetYAMLWithRoles is a config preset that declares its own roles, used
+// to constrain converge.go's fresh-install overlay-shadowing guard (the
+// `installRoles = nil` branch): a preset-owned roles list must only take
+// effect through the overlay -> base layered accessor chain when the
+// overlay itself leaves roles unset.
+const presetYAMLWithRoles = "version: \"1\"\n" +
+	"roles:\n  - triage\n  - review\n"
+
+func TestConverge_PresetFreshInstallWritesBaseAndOverlay(t *testing.T) {
+	presetPath := writePresetFile(t, presetYAMLWithRoles)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+
+	sc := &spyScaffoldCommit{}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Installed()) != 1 {
+		t.Fatalf("expected 1 installed, got %d", len(result.Installed()))
+	}
+
+	var overlayYAML, baseYAML []byte
+	for _, f := range sc.files {
+		switch f.Path {
+		case ".fullsend/config.base.yaml":
+			baseYAML = f.Content
+			if string(f.Content) != presetYAMLWithRoles {
+				t.Errorf("base content = %q, want preset bytes", f.Content)
+			}
+		case ".fullsend/config.yaml":
+			overlayYAML = f.Content
+		}
+	}
+	if baseYAML == nil {
+		t.Error("fresh install with declared preset must write config.base.yaml")
+	}
+	if overlayYAML == nil {
+		t.Fatal("fresh install must still write config.yaml overlay")
+	}
+
+	// convergeCfgWithDefaults sets Roles to the production cobra-default
+	// ([]string{"triage"}) with RolesExplicit false. The overlay must
+	// leave roles unset so the preset's own roles take effect via the
+	// overlay -> base layered accessor chain, instead of the fleet-wide
+	// default roles shadowing them (converge.go's installRoles = nil
+	// branch). Deleting or inverting that branch would still pass with
+	// only a file-existence assertion, so this asserts both the raw
+	// overlay bytes and the effective layered roles.
+	if strings.Contains(string(overlayYAML), "roles:") {
+		t.Errorf("overlay must not set roles when the preset owns them (RolesExplicit=false): %s", overlayYAML)
+	}
+	effective, err := config.ParsePerRepoConfigWriterLayered(overlayYAML, baseYAML)
+	if err != nil {
+		t.Fatalf("composing layered config: %v", err)
+	}
+	if got, want := effective.ConfigRoles(), []string{"triage", "review"}; !slices.Equal(got, want) {
+		t.Errorf("effective roles = %v, want preset roles %v (preset must not be shadowed by default roles)", got, want)
+	}
+}
+
+// TestConverge_PresetFreshInstallExplicitRolesWritesOverlay is the
+// RolesExplicit=true counterpart to
+// TestConverge_PresetFreshInstallWritesBaseAndOverlay: when the caller
+// explicitly passes --roles, converge.go must not take the
+// installRoles = nil branch, so the caller-supplied roles are written
+// into the overlay and take effect over the preset's own roles.
+func TestConverge_PresetFreshInstallExplicitRolesWritesOverlay(t *testing.T) {
+	presetPath := writePresetFile(t, presetYAMLWithRoles)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+
+	sc := &spyScaffoldCommit{}
+	cfg := convergeCfgWithDefaults(m)
+	cfg.Roles = []string{"fix"}
+	cfg.RolesExplicit = true
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Installed()) != 1 {
+		t.Fatalf("expected 1 installed, got %d", len(result.Installed()))
+	}
+
+	var overlayYAML, baseYAML []byte
+	for _, f := range sc.files {
+		switch f.Path {
+		case ".fullsend/config.base.yaml":
+			baseYAML = f.Content
+		case ".fullsend/config.yaml":
+			overlayYAML = f.Content
+		}
+	}
+	if overlayYAML == nil {
+		t.Fatal("fresh install must write config.yaml overlay")
+	}
+
+	if !strings.Contains(string(overlayYAML), "roles:") {
+		t.Errorf("overlay must set roles when the caller explicitly passed --roles: %s", overlayYAML)
+	}
+	effective, err := config.ParsePerRepoConfigWriterLayered(overlayYAML, baseYAML)
+	if err != nil {
+		t.Fatalf("composing layered config: %v", err)
+	}
+	if got, want := effective.ConfigRoles(), []string{"fix"}; !slices.Equal(got, want) {
+		t.Errorf("effective roles = %v, want caller-supplied roles %v (RolesExplicit=true must not be shadowed by the preset)", got, want)
+	}
+}
+
+func TestConverge_PresetIdempotentWhenUnchanged(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+
+	overlayBefore := fc.FileContents["acme/api/.fullsend/config.yaml"]
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		for _, f := range files {
+			if f.Path == ".fullsend/config.yaml" {
+				t.Error("idempotent preset converge must not rewrite overlay")
+			}
+		}
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.AlreadyCurrent()) != 1 {
+		t.Errorf("expected 1 already current, got %d (actions: %v)", len(result.AlreadyCurrent()), result.Results[0].Actions)
+	}
+	if committed {
+		t.Error("should not commit when declared preset matches installed base")
+	}
+	if got := fc.FileContents["acme/api/.fullsend/config.yaml"]; string(got) != string(overlayBefore) {
+		t.Error("overlay must be preserved when preset is unchanged")
+	}
+}
+
+func TestConverge_PresetChangeReplacesBasePreservesOverlay(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+	overlay := []byte("version: \"1\"\n# keep me\n")
+	fc.FileContents["acme/api/.fullsend/config.yaml"] = overlay
+
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+
+	var committedFiles []forge.TreeFile
+	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
+		committedFiles = files
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Converged()) != 1 {
+		t.Fatalf("expected 1 converged, got %d (err=%v actions=%v)", len(result.Converged()), result.Results[0].Error, result.Results[0].Actions)
+	}
+
+	var sawBase, sawOverlay bool
+	for _, f := range committedFiles {
+		switch f.Path {
+		case ".fullsend/config.base.yaml":
+			sawBase = true
+			if string(f.Content) != testPresetYAML {
+				t.Errorf("base content = %q, want new preset", f.Content)
+			}
+		case ".fullsend/config.yaml":
+			sawOverlay = true
+		}
+	}
+	if !sawBase {
+		t.Error("changed preset must replace config.base.yaml")
+	}
+	if sawOverlay {
+		t.Error("changed preset must not rewrite overlay")
+	}
+	if got := fc.FileContents["acme/api/.fullsend/config.yaml"]; string(got) != string(overlay) {
+		t.Error("overlay bytes must survive preset replacement")
+	}
+}
+
+func TestConverge_PresetHashMismatchFailsBeforeApply(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+	m.Defaults.ConfigBase.SHA256 = strings.Repeat("0", 64)
+
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 1 {
+		t.Fatalf("expected 1 failed, got %d", len(result.Failed()))
+	}
+	if result.Failed()[0].Error == nil || !strings.Contains(result.Failed()[0].Error.Error(), "hash mismatch") {
+		t.Errorf("expected hash mismatch error, got %v", result.Failed()[0].Error)
+	}
+	if committed {
+		t.Error("hash mismatch must fail before applying changes")
+	}
+}
+
+func TestConverge_PresetInvalidSourceFailsBeforeApply(t *testing.T) {
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = "/nonexistent/preset.yaml"
+
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 1 {
+		t.Fatalf("expected 1 failed, got %d", len(result.Failed()))
+	}
+	if committed {
+		t.Error("invalid source must fail before applying changes")
+	}
+}
+
+func TestConverge_NoPresetPreservesExistingBase(t *testing.T) {
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+
+	m := newConvergeManifest(repoNames...)
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.AlreadyCurrent()) != 1 {
+		t.Errorf("expected 1 already current, got %d", len(result.AlreadyCurrent()))
+	}
+	if committed {
+		t.Error("undeclared preset must not rewrite existing base")
+	}
+	if got := string(fc.FileContents["acme/api/.fullsend/config.base.yaml"]); got != testPresetYAML {
+		t.Errorf("existing base was modified: %q", got)
+	}
+}
+
+func TestConverge_GitLab_PresetChangeReplacesBase(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+	overlay := []byte("version: \"1\"\n# gitlab overlay\n")
+	fc.FileContents["acme/api/.fullsend/config.yaml"] = overlay
+
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.Manifest.Defaults.ConfigBase.Source = presetPath
+
+	var committedFiles []forge.TreeFile
+	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
+		committedFiles = append(committedFiles, files...)
+		return nil
+	}
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if result.Results[0].Error != nil {
+		t.Fatalf("repo error: %v", result.Results[0].Error)
+	}
+
+	var sawBase, sawOverlay bool
+	for _, f := range committedFiles {
+		switch f.Path {
+		case ".fullsend/config.base.yaml":
+			sawBase = true
+			if string(f.Content) != testPresetYAML {
+				t.Errorf("gitlab base content = %q, want new preset", f.Content)
+			}
+		case ".fullsend/config.yaml":
+			sawOverlay = true
+		}
+	}
+	if !sawBase {
+		t.Error("GitLab converge must replace drifted config.base.yaml")
+	}
+	if sawOverlay {
+		t.Error("GitLab converge must not rewrite overlay")
+	}
+}
+
+func TestConverge_GitLab_PresetFreshInstallWritesBase(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	fc := newFakeClientForBatch("acme/api")
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.Manifest.Defaults.ConfigBase.Source = presetPath
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Installed()) != 1 {
+		t.Fatalf("expected 1 installed, got %d (err=%v)", len(result.Installed()), result.Results[0].Error)
+	}
+
+	var hasBase, hasOverlay bool
+	for _, f := range sc.files {
+		switch f.Path {
+		case ".fullsend/config.base.yaml":
+			hasBase = true
+			if string(f.Content) != testPresetYAML {
+				t.Errorf("gitlab base content = %q, want preset bytes", f.Content)
+			}
+		case ".fullsend/config.yaml":
+			hasOverlay = true
+		}
+	}
+	if !hasBase {
+		t.Error("GitLab fresh install with declared preset must write config.base.yaml")
+	}
+	if !hasOverlay {
+		t.Error("GitLab fresh install must still write config.yaml overlay")
+	}
+}
+
+func TestConverge_FreshInstallDryRunReportsPreset(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+	cfg := convergeCfgWithDefaults(m)
+	cfg.DryRun = true
+
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		return nil
+	}
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if committed {
+		t.Error("dry-run must not commit")
+	}
+	var saw bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == ".fullsend/config.base.yaml" && a.Action == "add" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Errorf("expected dry-run add action for config.base.yaml, got %v", result.Results[0].Actions)
+	}
+}
+
+func TestConverge_RemotePresetWithoutHashWarns(t *testing.T) {
+	warned := make(map[string]bool)
+	const source = "https://example.com/preset.yaml"
+	if !shouldWarnRemotePreset(source, "", warned) {
+		t.Fatal("expected an unpinned remote preset to warn")
+	}
+	if shouldWarnRemotePreset(source, "", warned) {
+		t.Fatal("expected only one warning per preset source")
+	}
+	if shouldWarnRemotePreset(source, strings.Repeat("a", 64), warned) {
+		t.Fatal("expected a hashed remote preset not to warn")
+	}
+	if shouldWarnRemotePreset("preset.yaml", "", warned) {
+		t.Fatal("expected a local preset not to warn")
+	}
+}
+
+func TestConverge_PresetDryRunDoesNotCommit(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	markFullyInstalled(fc, "acme", "api")
+	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+
+	m := newConvergeManifest(repoNames...)
+	m.Defaults.ConfigBase.Source = presetPath
+	cfg := convergeCfgWithDefaults(m)
+	cfg.DryRun = true
+
+	committed := false
+	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
+		committed = true
+		return nil
+	}
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if committed {
+		t.Error("dry-run must not commit preset changes")
+	}
+	var saw bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == ".fullsend/config.base.yaml" && a.Action == "update" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Errorf("expected dry-run update action for config.base.yaml, got %v", result.Results[0].Actions)
+	}
+}
+
+func TestConverge_PerRepoPresetOverrideAndDisable(t *testing.T) {
+	overrideYAML := "version: \"1\"\nruntime: pi\n"
+	overridePath := writePresetFile(t, overrideYAML)
+	defaultPath := writePresetFile(t, testPresetYAML)
+
+	fc := newFakeClientForBatch("acme/inherit", "acme/override", "acme/disabled")
+	for _, repo := range []string{"inherit", "override", "disabled"} {
+		markFullyInstalled(fc, "acme", repo)
+		populateScaffoldContent(t, fc, "acme", repo, "v1.0.0", "https://mint.example.com")
+	}
+	fc.FileContents["acme/inherit/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+	fc.FileContents["acme/override/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+	fc.FileContents["acme/disabled/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+
+	m := &Manifest{
+		Version:  1,
+		Defaults: DefaultsConfig{ConfigBase: ConfigBase{Source: defaultPath}},
+		GitHub: &PlatformConfig{
+			MintURL:     "https://mint.example.com",
+			FullsendRef: "v1.0.0",
+			Repos: []RepoEntry{
+				{Name: "acme/inherit"},
+				{Name: "acme/override", ConfigBase: ConfigBase{Source: overridePath}},
+				{Name: "acme/disabled", ConfigBase: ConfigBase{Source: NoneSentinel}},
+			},
+		},
+	}
+
+	committed := map[string][]forge.TreeFile{}
+	commitFn := func(_ context.Context, owner, repo string, files []forge.TreeFile, _ bool, _ bool) error {
+		committed[owner+"/"+repo] = append(committed[owner+"/"+repo], files...)
+		return nil
+	}
+	cfg := convergeCfgWithDefaults(m)
+
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), commitFn, noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed()[0].Error)
+	}
+
+	if _, ok := committed["acme/inherit"]; ok {
+		t.Error("inherit repo should stay current")
+	}
+	var sawOverride bool
+	for _, f := range committed["acme/override"] {
+		if f.Path == ".fullsend/config.base.yaml" {
+			sawOverride = true
+			if string(f.Content) != overrideYAML {
+				t.Errorf("override base = %q, want per-repo preset", f.Content)
+			}
+		}
+	}
+	if !sawOverride {
+		t.Error("override repo must replace base with per-repo preset")
+	}
+	if _, ok := committed["acme/disabled"]; ok {
+		t.Error("disabled repo must preserve existing base without comparison")
 	}
 }

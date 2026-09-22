@@ -27,9 +27,12 @@ Detailed behavior and implementation requirements are defined in the
 
 Fullsend currently has a legacy `CODE_AUTO_MERGE` path in the Code post-script,
 while the product direction calls for a dedicated, opt-in auto-merge agent
-([agents#1132](https://github.com/fullsend-ai/agents/issues/1132)). Keeping both
-paths would create two Fullsend-owned ways to authorize autonomous merging and
-would make repository policy and operational auditing ambiguous.
+([agents#1132](https://github.com/fullsend-ai/agents/issues/1132)). The
+repository-local policy and evidence work is tracked in
+[fullsend#3016](https://github.com/fullsend-ai/fullsend/issues/3016) and
+[fullsend#6892](https://github.com/fullsend-ai/fullsend/issues/6892). Keeping
+both paths would create two Fullsend-owned ways to authorize autonomous merging
+and would make repository policy and operational auditing ambiguous.
 
 Review determines whether a change is acceptable; merge authorization must also
 account for current repository policy, required checks, human intent, and the
@@ -60,12 +63,13 @@ state actually supports that claim.
 Every semantic decision applies to exactly one immutable tuple:
 
 ```text
-(repository, pull_request_number, head_sha, base_ref, base_sha, policy_fingerprint)
+(forge_instance, repository_id, pull_request_number, head_sha, base_ref, base_sha, policy_fingerprint)
 ```
 
 Changing any member invalidates the decision. A model approval for one tuple
 does not authorize another head, base, repository, pull request, or policy
-version. The binding is established during deterministic preflight, copied into
+version. Repository names and URLs are display metadata, not authority-bearing
+identity. The binding is established during deterministic preflight, copied into
 the model's structured output, and verified again during postflight before
 mutation.
 
@@ -119,9 +123,11 @@ break production.
   insufficient for authorization — it cannot independently verify forge state,
   and its outputs are untrusted data until the host validates them.
 - **Use a dedicated stage with a host-side gate.** Chosen: the stage assesses
-  eligibility, while a trusted driver revalidates and requests the forge's
-  normal merge or queue mechanism. The model sandbox receives no merge-capable
-  credential; trusted host code owns the entire authority transition.
+  eligibility, while a trusted driver revalidates and requests an exact-head
+  direct merge. The model sandbox receives no merge-capable credential; trusted
+  host code owns the entire authority transition. A required merge queue is
+  unsupported for v1 mutation because enqueue lacks equivalent exact-head
+  conditionality.
 
 ## Decision
 
@@ -143,7 +149,9 @@ The implementation splits responsibility across three trust zones:
    to mutate the pull request.
 3. A **trusted runner post-script** records the decision, re-fetches every
    mutable fact from the forge, and may merge only the exact approved head
-   using the forge's compare-and-swap merge API.
+   using the forge's expected-head merge API and a dedicated identity whose
+   short-lived repository-scoped credential is isolated behind a constrained
+   merge broker.
 
 The sandbox boundary is enforced by the harness configuration: `GH_TOKEN` and
 GitHub provider profiles are present in `env.runner` but deliberately omitted
@@ -155,6 +163,8 @@ Before any model invocation, the trusted pre-script must establish all of the
 following from authoritative forge state:
 
 - The target is an open, non-draft pull request in the configured repository.
+- The head repository identity equals the configured/base repository identity;
+  forks and cross-repository pull requests are rejected.
 - The current head SHA and base ref/SHA are recorded from fresh forge state.
   The base SHA comes from the live base branch, not only the pull-request
   payload.
@@ -166,32 +176,54 @@ following from authoritative forge state:
 - Mergeability is known and the pull request is not conflicted.
 - The repository's native standing auto-merge feature is not enabled for this
   pull request.
+- Current forge rules require the pull-request head to be strictly up to date
+  with the base at merge time; without that atomic forge-side protection, live
+  mutation is unsupported because GitHub's merge endpoint does not condition
+  on the base SHA.
 
 An ineligible result stops before model invocation, avoiding inference cost.
 Unknown, missing, or API-error states fail closed.
 
+GitHub's aggregate `UNSTABLE` merge state is not by itself a failed gate: the
+controller's own pending check can produce that state. The host must instead
+prove every policy-named required check succeeded on the exact head and must
+still reject `BEHIND`, `BLOCKED`, `DIRTY`, and unknown merge states.
+
 ### Write-ahead receipt and postflight
 
 Before any mutation, a durable pending receipt containing the authorization
-snapshot, binding tuple, context fingerprint, request identity, and idempotency key
-must be persisted.
+snapshot, binding tuple, context fingerprint, request identity, and idempotency
+key must be persisted in host-authenticated storage. A distinct outcome receipt
+references it after success, refusal, or reconciliation. Forge comments may
+mirror either receipt for users but are not authoritative state.
 If the host crashes after the forge accepts the request but before completion is
-recorded, startup reconciliation must complete the pending receipt by inspecting
-current forge state.
+recorded, startup reconciliation must inspect current forge state and append the
+missing outcome receipt.
 
 After recording the receipt, the trusted post-script obtains fresh forge state
-and repeats every mutable gate. It must verify exact-head equality, base-branch
-and base-SHA equality, current reviews, required checks, mergeability, holds,
-policy, and cohort membership. Any mismatch produces a stale-decision rejection
-and no mutation.
+and repeats every mutable gate immediately before the forge call. It must
+verify open/non-draft state, native auto-merge state, exact-head equality,
+base-branch and base-SHA equality, current Review attestation, approvals,
+CODEOWNERS, required checks, mergeability, rulesets, holds, policy, changed
+paths, and cohort membership. Any mismatch produces a stale-decision rejection
+and no mutation. The final recheck repeats the live-base lookup and ordered
+merge-preview parent check, and verifies the current lease fencing token.
 
-### Exact-head merge
+### Exact-head direct merge
 
-The mutation uses the forge's compare-and-swap equivalent, supplying the
+The mutation uses the forge's expected-head conditional operation, supplying the
 expected head SHA. If the forge reports that the head changed between postflight
 and mutation, the controller records a stale-decision rejection and waits for a
 new reconciliation event. It does not enable native auto-merge or leave behind
-standing authority.
+standing authority. A repository that requires a merge queue fails closed in
+v1; queue mutation needs a later revision-binding contract.
+
+GitHub currently requires `Contents: write` for the merge operation, which has
+residual repository capability beyond the intended transition. The credential
+must therefore be short-lived and repository-scoped, and must never enter the
+model sandbox. A constrained host broker exposes only the expected-head merge
+operation and rejects push, pull-request metadata, native-auto-merge, policy,
+and administrator-bypass operations.
 
 ### Single enablement path
 
@@ -231,12 +263,13 @@ workload identity scoped to exactly the lab repository.
 - **Exact-head compare-and-swap works.** The successful merge used GitHub's
   merge API with the expected head SHA. A head change between postflight and
   mutation would have been rejected by the forge itself.
-- **27 adversarial unit tests passed.** Cases included stale approval, pending
+- **41 controller and dispatch unit tests passed.** Cases included stale approval, pending
   and failed checks, hold labels, disallowed paths, missing and oversized
   patches, unknown mergeability, stale base, stale merge preview, native
   auto-merge enabled, unsigned commits, unresolved threads, changes-requested
   reviews, stale model bindings, invalid decisions, eligible with risk signals,
-  receipt ordering, tampered repository, and tampered PR number.
+  receipt ordering, tampered repository and PR number, duplicate-receipt
+  suppression, dispatch selection, and aggregate mergeability self-deadlock.
 
 ### Lab discoveries that strengthened the design
 
@@ -250,9 +283,10 @@ workload identity scoped to exactly the lab repository.
   the pull-request patch. The semantic model needs bounded, API-sourced change
   evidence. Missing or oversized patches became deterministic failures.
 - **GitHub's merge API provides head-SHA conditionality but not base-SHA
-  atomicity.** The forge's compare-and-swap covers the head but not the base.
-  Production needs a per-PR lease so final base validation and mutation are
-  serialized.
+  atomicity.** A per-PR lease prevents duplicate requests for the same pull
+  request, but cannot prevent an unrelated merge or human action from advancing
+  the base. Production must require a forge-enforced strict up-to-date rule and
+  repeat the live-base and merge-preview-parent checks at final postflight.
 - **Require() accumulation pattern.** The deterministic gate implementation
   appends every failing condition to a list rather than short-circuiting. This
   ensures the receipt captures all reasons for ineligibility, not just the
@@ -260,19 +294,36 @@ workload identity scoped to exactly the lab repository.
 - **Two receipts are correct.** The write-ahead receipt (before mutation) and
   the outcome receipt (after attempt) represent different events and must
   remain distinct. The outcome receipt can be compact and reference the first.
+- **Aggregate mergeability can self-deadlock.** GitHub reported `UNSTABLE`
+  while Auto-Merge's own check was pending. Explicit required-check results on
+  the exact head must be authoritative; aggregate merge state remains useful
+  for rejecting behind, blocked, dirty, and unknown states.
+- **Readiness signals do not guarantee workflow delivery.** A readiness label
+  written with the workflow `GITHUB_TOKEN` did not trigger another workflow.
+  Review-first/CI-second and CI-first/Review-second ordering therefore require
+  trusted dispatch or periodic reconciliation, not reliance on label recursion.
+- **Controller configuration must be current and trusted.** A lifecycle event
+  initially loaded configuration from the event's stale base SHA, where the
+  Auto-Merge stage did not exist. Dispatch must load policy and controller
+  configuration from the current trusted default/base branch and include it in
+  the policy fingerprint.
 
 ### Known production hardening gaps
 
 The lab proved the core controller and authority boundary. These gaps remain for
 production:
 
-- **Purpose-built merge identity.** The lab used the coder role; production
-  needs a dedicated least-privilege identity whose only privileged
-  responsibility is the authorized merge transition.
-- **Per-PR lease.** GitHub does not provide atomic base-SHA conditionality;
-  a serializing lease is needed to close the TOCTOU window between base
-  verification and mutation. Required before `automatic` mode; without it,
-  concurrent runs could both pass postflight and issue duplicate requests.
+- **Purpose-built merge broker and identity.** The lab used the coder role;
+  production needs a dedicated identity with a short-lived repository-scoped
+  installation token isolated behind a broker that exposes only expected-head
+  direct merge. GitHub's required `Contents: write` permission leaves residual
+  capability, so the token must never be exposed to the sandbox or a general
+  command surface.
+- **Fenced per-PR lease.** Production needs atomic acquisition, a unique
+  monotonic fencing token, bounded renewal, ownership-checked release, and a
+  final driver fence check. This prevents a stalled predecessor or concurrent
+  successor from issuing a duplicate request; it does not replace strict
+  forge-side up-to-date enforcement for base-branch races.
 - **Idempotent receipt store.** GitHub comments were adequate for the lab;
   production needs an idempotent store with explicit forge-state reconciliation
   after ambiguous timeouts.
@@ -284,7 +335,18 @@ production:
   eligibility without manual history repair.
 - **Review attestation integration.** The contract specifies
   `ReviewAttestation` but the lab used forge-native review state directly.
-  Production must integrate structured Review evidence.
+  Production must integrate structured Review evidence in host-authenticated
+  storage with separation of duties: only Review can issue attestations,
+  Auto-Merge can read but cannot forge them, and lease/receipt records are
+  append-only and independently attributable. Forge comments may mirror
+  receipts but are not authoritative state.
+- **Bounded exact-head evidence.** Production must provide the evaluator with
+  the exact-head patch/blob evidence and reject missing, truncated,
+  wrong-revision, or policy-oversized evidence before model invocation.
+- **Ambiguous transmission handling.** GitHub does not accept Fullsend's
+  idempotency key. Once a mutation request begins transmission it must never be
+  automatically resent; lost responses require read-only reconciliation and,
+  when the result cannot be proven, operator resolution.
 - **Cross-forge generalization.** Version 1 is GitHub-first. GitLab and other
   forges require compatible safeguards.
 
@@ -300,8 +362,9 @@ production:
   durable write-ahead receipt before mutation, making the system auditable and
   crash-recoverable.
 - The first implementation needs a host-side policy/forge driver, structured
-  review attestation, and integration coverage for direct merges and merge
-  queues.
+  review attestation, and integration coverage for direct exact-head merges.
+  Merge-queue mutation requires a later contract that preserves the same
+  revision binding.
 - Repositories retain branch protection and queue enforcement as the final forge
   boundary; Fullsend cannot override failed requirements.
 - Observe-only and explicit human-trigger modes can be deployed before automatic
@@ -309,6 +372,8 @@ production:
 - The legacy Code auto-merge path is intentionally removed, so existing
   `CODE_AUTO_MERGE*` configuration must be replaced by dedicated-stage policy;
   this avoids split-brain enablement and makes the migration auditable.
-- The lab validated the authority boundary, binding tuple verification, and
-  fail-closed behavior across 27 adversarial test cases; remaining work is
-  production hardening, not architectural redesign.
+- The lab validated the authority boundary, binding tuple verification, direct
+  exact-head mutation, and fail-closed behavior across 41 controller and
+  dispatch test
+  cases. Production still requires the normative identity, storage, lease,
+  trigger-delivery, and policy controls before live rollout.

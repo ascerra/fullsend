@@ -9,7 +9,9 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 	"github.com/fullsend-ai/fullsend/internal/mintcore"
+	"github.com/fullsend-ai/fullsend/internal/preset"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
 
@@ -25,6 +27,15 @@ type ConvergeConfig struct {
 
 	// Roles is the list of agent roles to install (e.g., "triage", "coder").
 	Roles []string
+
+	// RolesExplicit is true when the caller explicitly passed --roles,
+	// as opposed to Roles carrying the flag's own default value. Fresh
+	// installs of a repo with a declared configuration preset use this
+	// to decide whether to write roles into the overlay (explicit
+	// override) or leave them unset so the preset's roles (or the
+	// code-default fallback) take effect through the layered accessor
+	// chain — see BuildScaffoldFiles.
+	RolesExplicit bool
 
 	// UpstreamRef is the git ref (SHA) used to pin scaffold workflow refs.
 	UpstreamRef string
@@ -107,9 +118,12 @@ type ConvergeResult struct {
 	// the schedules are missing (or vice versa).
 	NeedsGitLabPostInstall bool
 
-	// NeedsGitLabBotToken is true when the fullsend-bot PAT secret
-	// (secret:FULLSEND_FORGE_TOKEN) was not already present before this
-	// run. Callers must gate bot-token setup on this field specifically,
+	// NeedsGitLabBotToken is true only when the shared credential is still
+	// required by the live migration gate and the fullsend-bot PAT secret
+	// (secret:FULLSEND_FORGE_TOKEN) was not already present before this run.
+	// In enforced mode the shared credential is intentionally not required,
+	// so this remains false even when FULLSEND_FORGE_TOKEN is absent. Callers
+	// must gate bot-token setup on this field specifically,
 	// not on NeedsGitLabPostInstall, so a retry where the token already
 	// exists does not revoke and recreate the live PAT merely because a
 	// pipeline schedule is still missing.
@@ -200,6 +214,7 @@ type convergeDiscovery struct {
 	repo       ResolvedRepo
 	resolved   ResolvedConfig
 	components []ComponentStatus
+	preset     []byte
 	err        error
 }
 
@@ -217,6 +232,14 @@ func hasComponent(components []ComponentStatus, name string) bool {
 func secretsPresent(components []ComponentStatus) bool {
 	return hasComponent(components, "secret:"+forge.SecretGCPProjectID) &&
 		hasComponent(components, "secret:"+forge.SecretGCPWIFProvider)
+}
+
+func shouldWarnRemotePreset(source, hash string, warned map[string]bool) bool {
+	if hash != "" || !preset.IsRemote(source) || warned[source] {
+		return false
+	}
+	warned[source] = true
+	return true
 }
 
 // existingSecretNames returns the drift field names (e.g.
@@ -466,6 +489,8 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 		index        int
 	}
 	wifSeen := make(map[string]wifEntry)
+	store := newPresetCache()
+	warnedRemote := make(map[string]bool)
 
 	for i, d := range discoveries {
 		if d.err != nil {
@@ -475,6 +500,25 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 				Error: fmt.Errorf("checking installation status: %w", d.err),
 			}
 			continue
+		}
+
+		// Load declared presets before any writes so a hash mismatch or
+		// invalid source fails the repo without applying changes.
+		if d.resolved.Config != "" {
+			data, loadErr := store.Load(ctx, d.resolved.Config, d.resolved.ConfigHash)
+			if loadErr != nil {
+				result.Results[i] = ConvergeResult{
+					Owner: d.repo.Owner,
+					Repo:  d.repo.Repo,
+					Error: fmt.Errorf("loading config preset: %w", loadErr),
+				}
+				continue
+			}
+			d.preset = data
+			if shouldWarnRemotePreset(d.resolved.Config, d.resolved.ConfigHash, warnedRemote) {
+				progress(d.repo.Owner+"/"+d.repo.Repo, "preset",
+					"Remote preset fetched without config_base.sha256; content integrity is not verified")
+			}
 		}
 
 		// Compute WIF for repos that need secrets written.
@@ -616,14 +660,34 @@ func convergeRepo(ctx context.Context,
 	// bot-token setup and pipeline-schedule setup independently: a retry
 	// where one artifact already exists must not redo that one just
 	// because the other is still missing.
-	needsBotToken := !gitlabBotTokenPresent(d.components)
+	sharedCredentialRequired := true
+	if resolved.Forge == ForgeGitLab {
+		migrationMode, exists, modeErr := resolved.ForgeConfig.Client.GetRepoVariable(ctx, rr.Owner, rr.Repo, forge.VarGitLabRoleMigration)
+		if modeErr != nil {
+			cr.Error = fmt.Errorf("reading GitLab role migration mode: %w", modeErr)
+			return cr
+		}
+		if exists {
+			if _, parseErr := gitlabroles.ParseMode(migrationMode); parseErr != nil {
+				cr.Error = fmt.Errorf("invalid GitLab role migration mode: %w", parseErr)
+				return cr
+			}
+		}
+		if !exists || strings.TrimSpace(migrationMode) == "" {
+			sharedCredentialRequired = !gitlabRoleCredentialPresent(d.components)
+		} else {
+			sharedCredentialRequired = gitlabSharedCredentialRequired(migrationMode, exists)
+		}
+	}
+	needsBotToken := sharedCredentialRequired && !gitlabBotTokenPresent(d.components)
 	needsSchedules := !gitlabSchedulesPresent(d.components)
-	// Computed via gitlabPostInstallDone (rather than needsBotToken ||
-	// needsSchedules, though the two are equivalent by De Morgan's law)
-	// so the existing gitlabPostInstallDone test coverage actually
-	// constrains this production value instead of only testing an
-	// otherwise-unused helper.
-	needsPostInstall := !gitlabPostInstallDone(d.components)
+	// Track whether either independently gated post-install action is needed.
+	// The shared bot-token requirement is intentionally migration-aware, so
+	// gitlabPostInstallDone cannot be used here after enforced cutover.
+	needsPostInstall := needsBotToken || needsSchedules
+	cr.NeedsGitLabPostInstall = needsPostInstall
+	cr.NeedsGitLabBotToken = needsBotToken
+	cr.NeedsGitLabPipelineSchedules = needsSchedules
 
 	// Case 1: Workflow not on the default branch — full install via
 	// Install(), which always uses fresh-install PR metadata.
@@ -632,14 +696,18 @@ func convergeRepo(ctx context.Context,
 
 		if cfg.DryRun {
 			cr.Installed = true
-			cr.NeedsGitLabPostInstall = needsPostInstall
-			cr.NeedsGitLabBotToken = needsBotToken
-			cr.NeedsGitLabPipelineSchedules = needsSchedules
 			cr.Actions = append(cr.Actions, ComponentAction{
 				Component: "all",
 				Action:    "add",
 				Detail:    "Would install (new)",
 			})
+			if len(d.preset) > 0 {
+				cr.Actions = append(cr.Actions, ComponentAction{
+					Component: preset.BasePath,
+					Action:    "add",
+					Detail:    "would write config preset as " + preset.BasePath,
+				})
+			}
 			progress(repoFullName, "dry-run", "Would install (new)")
 			return cr
 		}
@@ -656,11 +724,22 @@ func convergeRepo(ctx context.Context,
 				"vendor enabled but GitLab CI templates do not yet reference the vendored binary")
 		}
 
+		installRoles := defaultRoles(cfg.Roles)
+		if len(d.preset) > 0 && !cfg.RolesExplicit {
+			// A base preset is declared and the caller did not
+			// explicitly pass --roles: leave Roles unset so
+			// BuildScaffoldFiles writes a stub overlay and the
+			// preset's own roles (or its code-default fallback) take
+			// effect via the layered accessor chain, instead of the
+			// fleet-wide default roles shadowing them.
+			installRoles = nil
+		}
+
 		installCfg := InstallConfig{
 			Owner:             rr.Owner,
 			Repo:              rr.Repo,
 			Forge:             resolved.Forge,
-			Roles:             defaultRoles(cfg.Roles),
+			Roles:             installRoles,
 			MintURL:           resolved.MintURL,
 			InferenceProject:  cfg.InferenceProject,
 			InferenceRegion:   cfg.InferenceRegion,
@@ -674,6 +753,7 @@ func convergeRepo(ctx context.Context,
 			ReuseSecrets:      hasSecrets,
 			ExistingSecrets:   existingSecretNames(d.components),
 			VendorBinary:      vendor,
+			Preset:            d.preset,
 		}
 
 		// When vendored, the running binary's embedded templates match the
@@ -703,9 +783,6 @@ func convergeRepo(ctx context.Context,
 		}
 
 		cr.Installed = true
-		cr.NeedsGitLabPostInstall = needsPostInstall
-		cr.NeedsGitLabBotToken = needsBotToken
-		cr.NeedsGitLabPipelineSchedules = needsSchedules
 		cr.WIFProvider = installResult.WIFProvider
 		cr.Actions = append(cr.Actions, ComponentAction{
 			Component: "all",
@@ -807,7 +884,7 @@ func convergeRepo(ctx context.Context,
 
 	scaffoldNeedsRepair := false
 	for _, c := range d.components {
-		if !c.Match && (c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:")) {
+		if !c.Match && (c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") || strings.HasPrefix(c.Name, "scaffold:")) {
 			scaffoldNeedsRepair = true
 			break
 		}
@@ -860,6 +937,24 @@ func convergeRepo(ctx context.Context,
 	}
 	allScaffoldFiles = append(allScaffoldFiles, contentDriftFiles...)
 
+	// 2d-iii: Configuration preset — replace .fullsend/config.base.yaml
+	// wholesale when a preset is declared and the installed bytes differ.
+	// Overlay is never rewritten. No declared preset is a no-op so an
+	// existing base file is preserved without comparison.
+	presetFiles, presetActions := convergePresetFiles(ctx, resolved, d.preset, cfg.DryRun, progress)
+	cr.Actions = append(cr.Actions, presetActions...)
+	var presetErrors []string
+	for _, a := range presetActions {
+		if a.Action == "error" {
+			presetErrors = append(presetErrors, a.Detail)
+		}
+	}
+	if len(presetErrors) > 0 {
+		cr.Error = fmt.Errorf("convergence errors: %s", strings.Join(presetErrors, "; "))
+		return cr
+	}
+	allScaffoldFiles = append(allScaffoldFiles, presetFiles...)
+
 	// 2e: Commit all scaffold file changes in one atomic commit.
 	// Variable/secret writes above are not rolled back on commit failure;
 	// the next Converge run self-heals (writes become no-ops, commit retries).
@@ -892,6 +987,28 @@ func convergeRepo(ctx context.Context,
 	}
 
 	return cr
+}
+
+func gitlabRoleCredentialPresent(components []ComponentStatus) bool {
+	for _, component := range components {
+		switch component.Name {
+		case "secret:" + forge.SecretGitLabPollerToken,
+			"secret:" + forge.SecretGitLabAnalystToken,
+			"secret:" + forge.SecretGitLabCoderToken:
+			if component.Present {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gitlabSharedCredentialRequired(migrationMode string, exists bool) bool {
+	if !exists {
+		return true
+	}
+	mode, err := gitlabroles.ParseMode(migrationMode)
+	return err == nil && mode != gitlabroles.ModeEnforced
 }
 
 // convergeVariables checks and repairs variable drift for an installed repo.
@@ -1554,7 +1671,7 @@ func convergeScaffoldFiles(ctx context.Context,
 		if c.Match {
 			continue
 		}
-		if c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") {
+		if c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") || strings.HasPrefix(c.Name, "scaffold:") {
 			field := DriftFieldName(c.Name)
 			if !c.Present {
 				missingComponents = append(missingComponents, field)

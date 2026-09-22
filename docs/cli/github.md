@@ -70,8 +70,15 @@ than being regenerated.
 | `--direct` | `false` | Push scaffold directly instead of creating a PR |
 | `--runtime` | `claude` | Agent runtime backend (`claude`, `pi`, `codex`, `dummy` or `dummy-playback`; `dummy` and `dummy-playback` are for behaviour test orgs only — see [runtimes.md](../runtimes.md)) |
 | `--fullsend-ref` | | Per-repo fullsend workflow ref override (conflicts with `--vendor`; per-repo only) |
-| `--config` | | Local file path or HTTPS URL to a vendor preset (committed as `.fullsend/config.base.yaml`; per-repo only). Persistent setup flags override matching preset values in `.fullsend/config.yaml` |
-| `--config-hash` | | SHA-256 hex digest to validate the preset content (requires `--config`) |
+| `--config` | | Local file path or HTTPS URL to a vendor preset (committed as `.fullsend/config.base.yaml`; per-repo only). Persistent setup flags override matching preset values in `.fullsend/config.yaml`. Fleet installs declare the same source in `repos.yaml` (`defaults.config_base` / per-repo `config_base`) |
+| `--config-hash` | | SHA-256 hex digest to validate the preset content (requires `--config`). Same semantics as `repos.yaml` `config_base.sha256` |
+
+**Fetching an HTTPS `--config` preset** rejects URLs containing userinfo (e.g.
+`https://user:pass@host/...`) and validates every resolved address — on the initial
+request and on every redirect — against loopback, link-local, private, and cloud
+metadata IP ranges. `HTTP_PROXY`/`HTTPS_PROXY` are ignored for preset fetches. This
+applies to any HTTPS preset source, whether passed via `--config` or declared in
+`repos.yaml` (`defaults.config_base` / per-repo `config_base`).
 
 ### Required OAuth scopes
 
@@ -108,6 +115,15 @@ Updates a single configuration value (secret or variable) on a GitHub org or rep
 ```bash
 fullsend github set <org|owner/repo> <key> <value>
 ```
+
+| Key | Storage | Description |
+|-----|---------|-------------|
+| `FULLSEND_GCP_REGION` | Repo variable | GCP region for inference |
+| `FULLSEND_REVIEW_CLIENT_ID` | Repo variable | Review app OAuth client ID |
+| `FULLSEND_PER_REPO_INSTALL` | Repo variable | Per-repo install marker |
+| `FULLSEND_GCP_PROJECT_ID` | Repo secret | GCP project for inference |
+| `FULLSEND_GCP_WIF_PROVIDER` | Repo secret | WIF provider resource name |
+| `FULLSEND_OPENAI_API_KEY` | Repo secret | Opt-in OpenAI API key used only when the WIF trio is unset. Do not add this via `github setup`; set it only when you cannot enrol OpenAI WIF. |
 
 ## `github status`
 

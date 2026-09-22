@@ -14,7 +14,12 @@ import (
 
 var uninstallVariables = slices.Concat([]string{forge.PerRepoGuardVar}, requiredVariables, []string{forge.VarGCPRegion, forge.VarReviewClientID})
 
-var uninstallSecrets = requiredSecrets
+// uninstallSecrets deletes every required secret plus the opt-in
+// FULLSEND_OPENAI_API_KEY if present. It must not become requiredSecrets
+// itself (or be added to it) — probe/converge use requiredSecretsForForge
+// to decide whether an installation is healthy, and the opt-in key's
+// absence is not a health problem, only its presence after uninstall is.
+var uninstallSecrets = slices.Concat(requiredSecrets, []string{forge.SecretOpenAIAPIKey})
 
 var gitlabUninstallVars = []string{
 	forge.PerRepoGuardVar,
@@ -32,8 +37,25 @@ var gitlabUninstallVars = []string{
 	forge.VarLastPollAtFull,
 	forge.VarLegacySA,
 	forge.VarLegacyWIFProvider,
+	forge.VarGitLabRoleMigration,
+	forge.VarGitLabRoleRegistry,
+	forge.VarGitLabRoleRotation,
+	forge.SecretGitLabPollerToken,
+	forge.SecretGitLabAnalystToken,
+	forge.SecretGitLabCoderToken,
 }
 
+// gitlabUninstallSecrets intentionally does NOT include the OpenAI static
+// key. Unlike FULLSEND_OPENAI_API_KEY on GitHub — a dedicated,
+// FULLSEND_-namespaced secret fullsend can safely delete regardless of
+// whether it was set via `fullsend github set` or pasted directly into
+// GitHub settings — GitLab's OPENAI_API_KEY CI/CD variable is never
+// forwarded by fullsend and shares no such namespace (per
+// docs/guides/infrastructure/openai-workload-identity.md's GitLab CI
+// note: it "already works" as a plain CI/CD variable, set by whoever
+// manages the project). Deleting an unprefixed, potentially-shared
+// variable on uninstall risks destroying a credential unrelated jobs in
+// the same project depend on.
 var gitlabUninstallSecrets = []string{
 	forge.SecretGCPProjectID,
 	forge.SecretGCPWIFProvider,
@@ -44,8 +66,11 @@ var gitlabScaffoldPaths = []string{
 	".gitlab/ci/fullsend-agent.yml",
 	".gitlab/ci/fullsend-dispatch.yml",
 	".gitlab/ci/fullsend-poll.yml",
+	".gitlab/ci/scripts/trust-ci-server-ca.sh",
 	".fullsend/config.yaml",
 }
+
+const gitlabTrustScriptPath = ".gitlab/ci/scripts/trust-ci-server-ca.sh"
 
 // UninstallVarsForForge returns the CI/CD variable names to delete for
 // the given forge during uninstall.
@@ -250,6 +275,9 @@ func uninstallRepoResources(ctx context.Context, cfg ResolvedConfig, direct bool
 	progress(fullName, "workflow", "Scaffold files removed")
 
 	forgeVars := UninstallVarsForForge(cfg.Forge)
+	if cfg.Forge == ForgeGitLab {
+		forgeVars = append(forgeVars, extraGitLabRoleUninstallVars(ctx, client, owner, repo, forgeVars)...)
+	}
 	forgeSecrets := UninstallSecretsForForge(cfg.Forge)
 
 	var varsDeleted, secretsDeleted int

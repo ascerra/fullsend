@@ -77,7 +77,14 @@ fullsend
 │   │   ├── --allowed-remote-resources <list> #  Per-repo allowed remote resources override
 │   │   ├── --vendor                         #   Vendor binary and content into each repo for offline CI
 │   │   ├── --gitlab-url <url>               #   GitLab instance URL; sets gitlab.url in the manifest
-│   │   └── --gitlab-bot-token <token>       #   GitLab bot PAT for free-tier instances
+│   │   ├── --gitlab-bot-token <token>       #   GitLab bot PAT for free-tier instances
+│   │   ├── --gitlab-role-migration <mode>   #   GitLab role-credential gate (migrating|enforced|rollback|disabled); ordinary install auto-enforces
+│   │   ├── --gitlab-role-registry <path>    #   Administrator GitLab role registry JSON
+│   │   ├── --gitlab-role-token role=token   #   Administrator-provided GitLab role PAT (repeatable)
+│   │   ├── --rotate-gitlab-roles            #   Force-rotate GitLab role credentials
+│   │   ├── --rotate-gitlab-role <name>      #   Rotate a specific GitLab role (repeatable)
+│   │   ├── --gitlab-role-cutover            #   Verify roles, enforce routing, and retire the shared credential
+│   │   └── --gitlab-role-cutover-drained    #   Confirm in-flight shared-token jobs have drained
 │   ├── uninstall    <repos...>              # Tear down fullsend from repos and remove from manifest
 │   │   ├── -f, --manifest <path>            #   Path to repos.yaml (default: repos.yaml)
 │   │   ├── --dry-run                        #   Preview without making changes
@@ -86,7 +93,7 @@ fullsend
 │   │   ├── --concurrency <int>              #   Max parallel operations (1-32, default: 4)
 │   │   ├── --manifest-only                  #   Remove from manifest without tearing down
 │   │   └── --uninstall-only                 #   Tear down without removing from manifest
-│   ├── status                               # Compare manifest against actual repo state
+│   ├── status                               # Compare manifest against actual repo state (includes declared config-preset drift)
 │   │   ├── -f, --manifest <path>            #   Path or URL to repos.yaml (default: repos.yaml)
 │   │   ├── --json                           #   Emit JSON output instead of table
 │   │   ├── --repo <owner/repo>              #   Filter to specific repos (repeatable)

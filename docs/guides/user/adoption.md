@@ -20,6 +20,10 @@ Before enabling any agents, you need to get fullsend running in your environment
 
 These guides walk through each step in detail. Once installed, you're ready to prepare your repo.
 
+GitLab teams follow a different path: no token mint, `fullsend repos install --forge gitlab`
+to scaffold, and `--roles` to scope which agents install. See
+[Configuring GitLab](../getting-started/configuring-gitlab.md).
+
 ### Prepare Your Repo
 
 The following items benefit any team regardless of how far you go with fullsend. Think of these as good engineering hygiene that happens to make agents more effective — not fullsend-specific requirements.
@@ -161,11 +165,14 @@ must not be used as an enablement mechanism.
 When the dedicated stage ships, it will be opt-in per repository, disabled by
 default, and subject to a host-side authorization gate that revalidates policy,
 checks, reviews, human-intent signals, head SHA, base branch, and base SHA before requesting the normal
-merge or queue path. The model is advisory — it evaluates semantic eligibility
+direct merge path. A repository that requires a merge queue is unsupported in
+v1, as is a repository that does not enforce the pull-request head being up to
+date at merge time. The model is advisory — it evaluates semantic eligibility
 but never holds a merge-capable credential. Every decision is bound to one exact
-revision tuple and recorded in a write-ahead receipt before mutation. The
+revision tuple using the forge instance and immutable repository ID, and is
+recorded in a write-ahead receipt before mutation. The
 authority boundary and fail-closed behavior have been validated in a private
-integration lab with 27 adversarial test cases.
+integration lab with 41 controller and dispatch test cases and a hosted exact-head merge.
 
 See the [Auto-Merge Contract v1](../../normative/auto-merge/v1/) for the full
 authority boundary, invariants, and rollout plan. The Review agent's

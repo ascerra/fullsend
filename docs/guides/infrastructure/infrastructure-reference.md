@@ -346,6 +346,7 @@ Secrets and variables are deployed at different scopes depending on the installa
 **Target repo secrets:**
 - `FULLSEND_GCP_PROJECT_ID`
 - `FULLSEND_GCP_WIF_PROVIDER`
+- `FULLSEND_OPENAI_API_KEY` — opt-in static OpenAI API key when OpenAI WIF is unavailable (not set by `github setup`)
 
 **Target repo variables:**
 - `FULLSEND_MINT_URL`
@@ -356,8 +357,13 @@ Secrets and variables are deployed at different scopes depending on the installa
 
 **Target repo CI/CD variables (protected):**
 - `FULLSEND_FORGE_TOKEN` — Project access token for bot identity at Developer (30) access (stored as protected CI/CD variable). Reduced from Maintainer (40) once poller state moved onto unprotected poll-state branches (#7381).
+
+Ordinary unflagged `repos install` retires the shared token once role credentials are ready; after successful cutover, `FULLSEND_FORGE_TOKEN` is deleted and missing role credentials are drift while the gate is `enforced`. [`--gitlab-role-cutover --gitlab-role-cutover-drained`](../../cli/repos.md#gitlab-role-cutover) remains an explicit fail-closed retry.
 - `FULLSEND_DISPATCH_SECRET` — Shared HMAC secret for signing dispatch variables and poll-state documents. Auto-provisioned by `repos install` (on both fresh installs and re-run/convergence of already-enrolled repos) as a masked, protected CI/CD variable.
 - `FULLSEND_POLL_MODE` — Pipeline schedule variable (`"slash"` or `"events"`); set automatically per schedule during install, not a project-level CI/CD variable
+- `FULLSEND_GITLAB_POLLER_TOKEN`, `FULLSEND_GITLAB_ANALYST_TOKEN`, `FULLSEND_GITLAB_CODER_TOKEN`, `FULLSEND_GITLAB_ROLE_<NAME>_TOKEN` — masked, protected role PATs provisioned by `repos install` ([gitlab-role-credentials.md](../../contributing/gitlab-role-credentials.md)). Fresh and existing shared-token installs create the three built-in tokens; ordinary unflagged install then retires `FULLSEND_FORGE_TOKEN` once every registered role is ready. When the gate is `migrating` or `enforced`, `fullsend poll` and `fullsend run` authenticate with the matching role token rather than the shared PAT. Absence is not a health failure while the gate is `disabled` or during partial `migrating`; `repos status` reports which roles are ready. Custom `own` roles use `FULLSEND_GITLAB_ROLE_<NAME>_TOKEN`; `reuse` roles share another registered credential.
+- `FULLSEND_GITLAB_ROLE_MIGRATION`, `FULLSEND_GITLAB_ROLE_REGISTRY` — protected, unmasked gate and administrator registry JSON (policy and credential references, never secret values). Written by `repos install`; not repository or merge-request content.
+- `FULLSEND_GITLAB_ROLE_ROTATION` — protected, unmasked per-role rotation state (lock, token IDs, expiry dates, phase; never secret values). Written when `repos install` rotates a role credential ([gitlab-role-credentials.md](../../contributing/gitlab-role-credentials.md)).
 
 **Poll-state branches:** `repos install` (on both fresh installs and
 re-run/convergence of already-enrolled repos) creates
@@ -406,6 +412,7 @@ access instead of Maintainer. See ADR 0067.
 - `FULLSEND_GCP_PROJECT_ID` — GCP project ID for inference (stored as a CI/CD secret, protected + masked)
 - `FULLSEND_GCP_WIF_PROVIDER` — WIF provider resource name for inference (stored as a CI/CD secret, protected + masked)
 - `FULLSEND_GCP_REGION` — GCP region for inference (e.g., `us-central1`)
+- `OPENAI_API_KEY` — optional static OpenAI API key when OpenAI WIF is unavailable (masked CI/CD variable; already on the runner path, no extra forwarding)
 
 ### Secrets Layer Behavior
 
