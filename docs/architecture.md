@@ -377,10 +377,10 @@ the repo's CODEOWNERS and review process
 **Decided:**
 
 - Autonomous merge is a separate `auto-merge` stage, opt-in per repository and
-  disabled by default. The model is advisory: it evaluates semantic eligibility
-  but never holds a merge-capable credential or authorizes mutation. Trusted
-  host code revalidates current forge state and controls direct or queue
-  execution without administrator bypass
+  disabled by default. The agent recommends whether a pull request is ready but
+  never receives merge credentials. Trusted Fullsend runtime code checks the
+  latest GitHub state and performs the final action through the repository's
+  required direct-merge or merge-queue path. Administrator bypass is not allowed
   ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md)).
 - The dedicated stage is the sole Fullsend-owned autonomous-merge path; the
   legacy Code-agent `CODE_AUTO_MERGE*` path will be retired rather than kept as
