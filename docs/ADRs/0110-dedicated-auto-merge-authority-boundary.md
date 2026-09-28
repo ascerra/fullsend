@@ -43,8 +43,11 @@ and [fullsend#6892](https://github.com/fullsend-ai/fullsend/issues/6892).
 An agent can recommend that a pull request be merged, but it cannot authorize
 the merge itself. Before acting, the trusted Fullsend runtime must confirm that
 required checks and reviews still pass, no human has blocked the change, and the
-revision being merged is the one that was evaluated. This keeps merge
-credentials and final enforcement outside the agent sandbox, consistent with
+evaluated revision is the one the runtime authorizes onto the repository's
+merge path. For a merge-queue repository, GitHub may generate a different
+queue revision; deterministic SCM-state checks are repeated against that
+revision, while semantic reauthorization of it remains follow-up work. This
+keeps merge credentials and final enforcement outside the agent sandbox, consistent with
 [ADR 0017](0017-credential-isolation-for-sandboxed-agents.md).
 
 The initial deployment targets, `fullsend-ai/fullsend` and
