@@ -548,6 +548,19 @@ Aggregates review verdicts and applies labels:
 - each **review run start** (including push-triggered re-review) clears **`ready-for-merge`** together with **`ready-for-review`** so merge approval is never stale after new commits
 ADR 0002: [Building block 12](ADRs/0002-initial-fullsend-design.md#12-coordinator-merge-algorithm).
 
+**Decided:**
+
+- Autonomous merging uses a dedicated, opt-in Auto-Merge stage rather than a
+  second Code-agent merge path ([ADR 0110](ADRs/0110-dedicated-auto-merge-authority-boundary.md)).
+  The stage consumes trusted semantic-provider evidence and repository-defined
+  unattended-merge scope; SCM remains authoritative for mechanical gates,
+  merge-queue policy, and the final merge. A trusted runtime may request the
+  native direct or queue path, but may not use a merge token to bypass a
+  repository rule; blocked pull requests wait or escalate. The dedicated stage
+  is the target architecture and is not yet operational everywhere; the legacy
+  `CODE_AUTO_MERGE*` path remains during migration and is planned for
+  retirement.
+
 ### 13. Observability
 
 Traceability layer across issue, **Triage**, **Code**, **Review**, checks, and merge for incident response and correlation across automation runs.
